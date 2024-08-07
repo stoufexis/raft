@@ -2,6 +2,6 @@ package com.stoufexis.leader.rpc
 
 import com.stoufexis.leader.model.Term
 
-enum VoteResponse[A]:
-  case Granted[A](term: Term)                  extends VoteResponse[A]
-  case Rejected[A](term: Term, reason: String) extends VoteResponse[A]
+enum VoteResponse:
+  case Granted(term: Term)
+  case Rejected(term: Term, reason: String)
