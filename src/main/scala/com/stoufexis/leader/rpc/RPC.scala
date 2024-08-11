@@ -1,16 +1,18 @@
 package com.stoufexis.leader.rpc
 
-import cats.effect.kernel.*
 import com.stoufexis.leader.model.NodeId
 import fs2.Stream
 
-trait RPC[F[_], A]:
-  def voteRequest(to: NodeId, request: VoteRequest[A]): F[VoteResponse]
+trait RPC[F[_]]:
+  def voteBroadcast(request: VoteRequest): Stream[F, VoteResponse]
 
-  def heartbeatRequest(to: NodeId, request: HeartbeatRequest[A]): F[HeartbeatResponse]
+  def voteRequest(to: NodeId, request: VoteRequest): F[VoteResponse]
 
-  // TODO: Simplify
-  def incomingVoteRequests: Stream[F, (VoteRequest[A], DeferredSink[F, VoteResponse])]
+  def headbeatBroadcast(request: HeartbeatRequest): Stream[F, HeartbeatResponse]
 
-  def incomingHeartbeatRequests: Stream[F, (HeartbeatRequest[A], DeferredSink[F, HeartbeatResponse])]
+  def heartbeatRequest(to: NodeId, request: HeartbeatRequest): F[HeartbeatResponse]
+
+  def incomingVoteRequests: Stream[F, IncomingVoteRequest[F]]
+
+  def incomingHeartbeatRequests: Stream[F, IncomingHeartbeat[F]]
 

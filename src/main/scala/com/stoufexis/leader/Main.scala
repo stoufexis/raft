@@ -62,49 +62,49 @@ import io.grpc.netty.shaded.io.grpc.netty.*
   * The above assumes a constant node id for a member of the cluster.
  */
 
-class PingerServiceImpl extends PingerFs2Grpc[IO, Metadata]:
-  def ping(request: PingRequest, @unused ctx: Metadata): IO[PingResponse] =
-    request match
-      case PingRequest("PING") => IO.pure(PingResponse("PONG"))
-      case PingRequest(msg)    => IO.pure(PingResponse(s"Malformed request: $msg"))
+// class PingerServiceImpl extends PingerFs2Grpc[IO, Metadata]:
+//   def ping(request: PingRequest, @unused ctx: Metadata): IO[PingResponse] =
+//     request match
+//       case PingRequest("PING") => IO.pure(PingResponse("PONG"))
+//       case PingRequest(msg)    => IO.pure(PingResponse(s"Malformed request: $msg"))
 
 
-val client: IO[Unit] =
-  val managedChannelResource: Resource[IO, ManagedChannel] =
-    NettyChannelBuilder
-      .forAddress("127.0.0.1", 9999)
-      .usePlaintext()
-      .resource[IO]
+// val client: IO[Unit] =
+//   val managedChannelResource: Resource[IO, ManagedChannel] =
+//     NettyChannelBuilder
+//       .forAddress("127.0.0.1", 9999)
+//       .usePlaintext()
+//       .resource[IO]
 
-  val resource: Resource[IO, PingerFs2Grpc[IO, Metadata]] =
-    managedChannelResource
-      .flatMap(PingerFs2Grpc.stubResource)
+//   val resource: Resource[IO, PingerFs2Grpc[IO, Metadata]] =
+//     managedChannelResource
+//       .flatMap(PingerFs2Grpc.stubResource)
 
-  resource.use: service =>
-    List(PingRequest("PING"), PingRequest("PiNG"))
-      .traverse: ping =>
-        for
-          response <- service.ping(ping, Metadata())
-          _        <- IO.println(response)
-        yield ()
-      .void
+//   resource.use: service =>
+//     List(PingRequest("PING"), PingRequest("PiNG"))
+//       .traverse: ping =>
+//         for
+//           response <- service.ping(ping, Metadata())
+//           _        <- IO.println(response)
+//         yield ()
+//       .void
 
-val runServer: Resource[IO, Unit] =
-  for
-    service: ServerServiceDefinition <-
-      PingerFs2Grpc.bindServiceResource[IO](new PingerServiceImpl)
+// val runServer: Resource[IO, Unit] =
+//   for
+//     service: ServerServiceDefinition <-
+//       PingerFs2Grpc.bindServiceResource[IO](new PingerServiceImpl)
 
-    _ <-
-      NettyServerBuilder
-        .forPort(9999)
-        .addService(service)
-        .resource[IO]
-        .evalMap(server => IO(server.start()))
-  yield ()
+//     _ <-
+//       NettyServerBuilder
+//         .forPort(9999)
+//         .addService(service)
+//         .resource[IO]
+//         .evalMap(server => IO(server.start()))
+//   yield ()
 
 
-object Server extends IOApp.Simple:
-  def run: IO[Unit] = runServer.useForever
+// object Server extends IOApp.Simple:
+//   def run: IO[Unit] = runServer.useForever
 
-object Client extends IOApp.Simple:
-  def run: IO[Unit] = client
+// object Client extends IOApp.Simple:
+//   def run: IO[Unit] = client

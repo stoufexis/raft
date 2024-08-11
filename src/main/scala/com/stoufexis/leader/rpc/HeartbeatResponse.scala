@@ -2,4 +2,6 @@ package com.stoufexis.leader.rpc
 
 import com.stoufexis.leader.model.*
 
-case class HeartbeatResponse(term: Term)
+enum HeartbeatResponse:
+  case Accepted
+  case Rejected(term: Term, reason: String)

@@ -35,5 +35,16 @@ lazy val root =
     .in(file("."))
     .enablePlugins(Fs2Grpc)
     .settings(
-      libraryDependencies ++= effect ++ log ++ grpc ++ test
+      libraryDependencies ++= effect ++ log ++ grpc ++ test,
+      scalacOptions ++= Seq(
+        "-Ykind-projector:underscores",
+        "-Wvalue-discard",
+        "-Wunused:implicits",
+        "-Wunused:explicits",
+        "-Wunused:imports",
+        "-Wunused:locals",
+        "-Wunused:params",
+        "-Wunused:privates"
+        // "-source:future" TODO: MAKE IT WORK!!!
+      ),
     )
