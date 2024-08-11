@@ -4,4 +4,4 @@ import com.stoufexis.leader.model.*
 
 enum HeartbeatResponse:
   case Accepted
-  case Rejected(term: Term, reason: String)
+  case TermExpired(newTerm: Term)

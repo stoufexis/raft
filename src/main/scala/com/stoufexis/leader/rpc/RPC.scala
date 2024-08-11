@@ -4,11 +4,11 @@ import com.stoufexis.leader.model.NodeId
 import fs2.Stream
 
 trait RPC[F[_]]:
-  def voteBroadcast(request: VoteRequest): Stream[F, VoteResponse]
+  def voteBroadcast(request: VoteRequest): Stream[F, (NodeId, VoteResponse)]
 
   def voteRequest(to: NodeId, request: VoteRequest): F[VoteResponse]
 
-  def headbeatBroadcast(request: HeartbeatRequest): Stream[F, HeartbeatResponse]
+  def heartbeatBroadcast(request: HeartbeatRequest): Stream[F, (NodeId, HeartbeatResponse)]
 
   def heartbeatRequest(to: NodeId, request: HeartbeatRequest): F[HeartbeatResponse]
 
