@@ -5,8 +5,7 @@ import cats.effect.kernel.*
 import cats.implicits.given
 import com.stoufexis.leader.model.*
 import com.stoufexis.leader.rpc.*
-import com.stoufexis.leader.util.MajorityReachedSignal
-import com.stoufexis.leader.util.Timeout
+import com.stoufexis.leader.util.*
 import fs2.*
 import org.typelevel.log4cats.Logger
 
@@ -35,7 +34,7 @@ object Leadership:
     def modify[B](f: (Term, NodeState) => ((Term, NodeState), F[B])): F[B]
 
     def onState(
-      leader:      (Term, MajorityReachedSignal[F]) => F[(Term, NodeState)],
+      leader:      (Term, ConfirmLeader[F]) => F[(Term, NodeState)],
       onCandidate: Term => F[(Term, NodeState)],
       onFollower:  Term => F[(Term, NodeState)]
     ): Stream[F, Unit]
@@ -82,12 +81,12 @@ object Leadership:
     nodeId:        NodeId,
     heartbeatRate: FiniteDuration,
     staleAfter:    FiniteDuration
-  ): (Term, MajorityReachedSignal[F]) => F[(Term, NodeState)] =
+  ): (Term, ConfirmLeader[F]) => F[(Term, NodeState)] =
     enum BroardcastResult:
       case Timeout
       case TermExpired(newTerm: Term)
 
-    (term, signal) =>
+    (term, confirmLeader) =>
       repeatOnInterval(heartbeatRate, rpc.heartbeatBroadcast(HeartbeatRequest(nodeId, term)))
         .evalMapAccumulate(Set.empty[NodeId]):
           case (nodes, (node, HeartbeatResponse.Accepted)) =>
@@ -96,7 +95,7 @@ object Leadership:
 
             val fu: F[Unit] =
               if newNodes.size >= majorityCnt
-              then signal.majorityReached
+              then confirmLeader.leaderConfirmed
               else Temporal[F].unit
 
             fu as (newNodes, None)

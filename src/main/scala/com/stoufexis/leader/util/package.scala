@@ -1,4 +1,4 @@
-package com.stoufexis.leader
+package com.stoufexis.leader.util
 
 import cats.Monad
 import cats.effect.Temporal
@@ -15,6 +15,9 @@ extension [F[_]](l: Logger[F])
 
 extension [F[_]: Monad, A](deferred: DeferredSink[F, A])
   def complete_(a: A): F[Unit] = deferred.complete(a).void
+
+extension [F[_]: Monad](deferred: DeferredSink[F, Unit])
+  def complete_ : F[Unit] = deferred.complete(()).void
 
 def repeatOnInterval[F[_]: Temporal, A](
   delay:  FiniteDuration,
