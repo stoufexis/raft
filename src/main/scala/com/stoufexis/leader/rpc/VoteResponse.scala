@@ -4,4 +4,5 @@ import com.stoufexis.leader.model.Term
 
 enum VoteResponse:
   case Granted
+  case Rejected
   case TermExpired(term: Term)
