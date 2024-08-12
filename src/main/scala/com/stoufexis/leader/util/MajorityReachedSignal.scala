@@ -21,8 +21,11 @@ object ConfirmedLeader:
           Deferred[F, Unit].flatMap(confirms.offer)
 
       confirmLeader: ConfirmLeader[F] = new:
-        def leaderConfirmed: F[Unit] =
-          confirms.tryTake.flatMap:
-            case None           => F.unit
-            case Some(deferred) => deferred.complete_ >> leaderConfirmed
+        def leaderConfirmed: F[Unit] = F.uncancelable: _ =>
+          def go: F[Unit] =
+            confirms.tryTake.flatMap:
+              case None           => F.unit
+              case Some(deferred) => deferred.complete_ >> go
+          go
+        end leaderConfirmed
     yield (confirmLeader, confirmLeaderWait)
