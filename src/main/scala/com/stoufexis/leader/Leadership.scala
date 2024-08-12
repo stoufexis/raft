@@ -1,11 +1,11 @@
 package com.stoufexis.leader
 
 import cats.*
-import cats.effect.SyncIO
 import cats.effect.kernel.*
 import cats.implicits.given
 import com.stoufexis.leader.model.*
 import com.stoufexis.leader.rpc.*
+import com.stoufexis.leader.util.MajorityReachedSignal
 import com.stoufexis.leader.util.Timeout
 import fs2.*
 import org.typelevel.log4cats.Logger
@@ -32,18 +32,13 @@ object Leadership:
 
     val majorityCnt: Int
 
-    def update(f: (Term, NodeState) => (Term, NodeState)): F[Unit]
-
     def modify[B](f: (Term, NodeState) => ((Term, NodeState), F[B])): F[B]
 
-    def behaviorFor(f: (Term, NodeState) => F[(Term, NodeState)]): Stream[F, Unit]
-
-  extension [F[_]](l: Logger[F])
-    def logDropped(str: String): F[Unit] =
-      l.warn(s"Message dropped: $str")
-
-  extension [F[_]: Monad, A](deferred: DeferredSink[F, A])
-    def complete_(a: A): F[Unit] = deferred.complete(a).void
+    def onState(
+      leader:      (Term, MajorityReachedSignal[F]) => F[(Term, NodeState)],
+      onCandidate: Term => F[(Term, NodeState)],
+      onFollower:  Term => F[(Term, NodeState)]
+    ): Stream[F, Unit]
 
   def incoming[F[_]: Concurrent: Logger, A](
     processConcurrency: Int,
@@ -77,74 +72,64 @@ object Leadership:
             st -> Logger[F].logDropped(s"New election for current term $term")
 
           case _ =>
-            (request.term, NodeState.VotedFollower(request.from))
-              -> sink.complete_(VoteResponse.Granted)
+            (request.term, NodeState.VotedFollower) -> sink.complete_(VoteResponse.Granted)
 
   end incoming
 
-  def repeatOnInterval[F[_]: Temporal, A](
-    delay:  FiniteDuration,
-    stream: Stream[F, A]
-  ): Stream[F, A] =
-    (Stream.unit ++ Stream.fixedDelay(delay)) >> stream
-
   def leaderBehavior[F[_]: Temporal: Logger](
     rpc:           RPC[F],
-    term:          Term,
     majorityCnt:   Int,
     nodeId:        NodeId,
     heartbeatRate: FiniteDuration,
     staleAfter:    FiniteDuration
-  ): F[(Term, NodeState)] =
+  ): (Term, MajorityReachedSignal[F]) => F[(Term, NodeState)] =
     enum BroardcastResult:
       case Timeout
-      case MajorityReached
       case TermExpired(newTerm: Term)
 
-    // TODO: maybe detect missed periods
-    repeatOnInterval(heartbeatRate, rpc.heartbeatBroadcast(HeartbeatRequest(nodeId, term)))
-      .evalMapAccumulate(Set.empty[NodeId]):
-        case (nodes, (node, HeartbeatResponse.Accepted)) =>
-          val newNodes: Set[NodeId] =
-            nodes + node
+    (term, signal) =>
+      repeatOnInterval(heartbeatRate, rpc.heartbeatBroadcast(HeartbeatRequest(nodeId, term)))
+        .evalMapAccumulate(Set.empty[NodeId]):
+          case (nodes, (node, HeartbeatResponse.Accepted)) =>
+            val newNodes: Set[NodeId] =
+              nodes + node
 
-          val output: Option[BroardcastResult] =
-            if newNodes.size >= majorityCnt
-            then Some(BroardcastResult.MajorityReached)
-            else None
+            val fu: F[Unit] =
+              if newNodes.size >= majorityCnt
+              then signal.majorityReached
+              else Temporal[F].unit
 
-          Logger[F]
-            .debug(s"Node $node accepted heartbeat")
-            .as((newNodes, output))
+            fu as (newNodes, None)
 
-        case (nodes, (node, HeartbeatResponse.TermExpired(newTerm))) =>
-          if term >= newTerm then
+          case (nodes, (node, HeartbeatResponse.TermExpired(newTerm))) if term >= newTerm =>
             val err: String =
               s"Got TermExpired with non-new term from $node. current: $term, received: $newTerm"
 
             Logger[F].logDropped(err) as (nodes, None)
-          else
+
+          case (nodes, (node, HeartbeatResponse.TermExpired(newTerm))) =>
             Temporal[F].pure(nodes, Some(BroardcastResult.TermExpired(newTerm)))
-      .mapFilter(_._2)
-      .timeoutOnPullTo(staleAfter, Stream(BroardcastResult.Timeout))
-      .collectFirst:
-        case BroardcastResult.Timeout              => (term, NodeState.Follower)
-        case BroardcastResult.TermExpired(newTerm) => (newTerm, NodeState.Follower)
-      .compile
-      .lastOrError
+        .mapFilter(_._2)
+        .timeoutOnPullTo(staleAfter, Stream(BroardcastResult.Timeout))
+        .collectFirst:
+          case BroardcastResult.Timeout              => (term, NodeState.Follower)
+          case BroardcastResult.TermExpired(newTerm) => (newTerm, NodeState.Follower)
+        .compile
+        .lastOrError
 
   def notifier[F[_]: Temporal: Logger](
     rpc:     RPC[F],
     timeout: Timeout[F],
     state:   State[F]
   ): Stream[F, Unit] =
-    state.behaviorFor:
-      case (term, NodeState.Leader) =>
-        leaderBehavior(
-          rpc,
-          term,
-          state.majorityCnt,
-          state.nodeId,
-          timeout.heartbeatRate,
-          timeout.assumeStaleAfter
-        )
+    state.onState(
+      leader = leaderBehavior(
+        rpc,
+        state.majorityCnt,
+        state.nodeId,
+        timeout.heartbeatRate,
+        timeout.assumeStaleAfter
+      ),
+      onCandidate = ???,
+      onFollower  = ???
+    )
