@@ -75,16 +75,20 @@ object Leadership:
 
   end incoming
 
-  def leaderBehavior[F[_]: Temporal: Logger](
+  def leaderBehavior[F[_]](
     rpc:           RPC[F],
     majorityCnt:   Int,
     nodeId:        NodeId,
     heartbeatRate: FiniteDuration,
     staleAfter:    FiniteDuration
+  )(using
+    F:   Temporal[F],
+    log: Logger[F]
   ): (Term, ConfirmLeader[F]) => F[(Term, NodeState)] =
-    enum BroardcastResult:
+    enum BroadcastResult:
       case Timeout
       case TermExpired(newTerm: Term)
+      case MajorityReached
 
     (term, confirmLeader) =>
       repeatOnInterval(heartbeatRate, rpc.heartbeatBroadcast(HeartbeatRequest(nodeId, term)))
@@ -93,26 +97,32 @@ object Leadership:
             val newNodes: Set[NodeId] =
               nodes + node
 
-            val fu: F[Unit] =
+            val output: Option[BroadcastResult] =
               if newNodes.size >= majorityCnt
-              then confirmLeader.leaderConfirmed
-              else Temporal[F].unit
+              then Some(BroadcastResult.MajorityReached)
+              else None
 
-            fu as (newNodes, None)
+            F.pure((newNodes, output))
 
           case (nodes, (node, HeartbeatResponse.TermExpired(newTerm))) if term >= newTerm =>
-            val err: String =
+            val warn: F[Unit] = log.logDropped:
               s"Got TermExpired with non-new term from $node. current: $term, received: $newTerm"
 
-            Logger[F].logDropped(err) as (nodes, None)
+            warn as (nodes, None)
 
           case (nodes, (node, HeartbeatResponse.TermExpired(newTerm))) =>
-            Temporal[F].pure(nodes, Some(BroardcastResult.TermExpired(newTerm)))
+            val warn: F[Unit] = log.warn:
+              s"Detected expired term. previous: $term, new: $newTerm"
+
+            warn as (nodes, Some(BroadcastResult.TermExpired(newTerm)))
         .mapFilter(_._2)
-        .timeoutOnPullTo(staleAfter, Stream(BroardcastResult.Timeout))
-        .collectFirst:
-          case BroardcastResult.Timeout              => (term, NodeState.Follower)
-          case BroardcastResult.TermExpired(newTerm) => (newTerm, NodeState.Follower)
+        .timeoutOnPullTo(staleAfter, Stream(BroadcastResult.Timeout))
+        .flatMap:
+          // output an element only if term expired or timeout reached
+          case BroadcastResult.MajorityReached      => Stream.exec(confirmLeader.leaderConfirmed)
+          case BroadcastResult.Timeout              => Stream((term, NodeState.Follower))
+          case BroadcastResult.TermExpired(newTerm) => Stream((newTerm, NodeState.Follower))
+        .take(1)
         .compile
         .lastOrError
 
