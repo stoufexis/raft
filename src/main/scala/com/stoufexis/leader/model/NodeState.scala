@@ -1,6 +1,6 @@
 package com.stoufexis.leader.model
 
-enum NodeState:
+enum NodeState derives CanEqual:
   case Follower, Candidate, Leader, VotedFollower
 
 object NodeState:

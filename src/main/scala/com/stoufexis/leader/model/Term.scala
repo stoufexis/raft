@@ -6,3 +6,4 @@ object Term:
   def init: Term = 1
 
   given Ordering[Term] = Ordering.Int
+  given CanEqual[Term, Term] = CanEqual.derived

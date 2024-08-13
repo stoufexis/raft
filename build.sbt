@@ -44,7 +44,8 @@ lazy val root =
         "-Wunused:imports",
         "-Wunused:locals",
         "-Wunused:params",
-        "-Wunused:privates"
+        "-Wunused:privates",
+        "-language:strictEquality"
         // "-source:future" TODO: MAKE IT WORK!!!
       ),
     )

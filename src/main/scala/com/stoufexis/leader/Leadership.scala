@@ -2,15 +2,18 @@ package com.stoufexis.leader
 
 import cats.*
 import cats.effect.kernel.*
+import cats.effect.std.Mutex
 import cats.implicits.given
 import com.stoufexis.leader.model.*
 import com.stoufexis.leader.rpc.*
 import com.stoufexis.leader.util.*
 import fs2.*
+import fs2.concurrent.SignallingRef
 import org.typelevel.log4cats.Logger
 
 import scala.concurrent.duration.FiniteDuration
 import scala.math.Ordered.orderingToOrdered
+
 import java.time.LocalDateTime
 
 /** Raft leadership for a single entity
@@ -26,19 +29,32 @@ trait Leadership[F[_]]:
 
   def discoverLeader: F[Discovery]
 
+  def waitUntilConfirmedLeader: F[Boolean]
+
 object Leadership:
-  trait State[F[_]]:
-    val nodeId: NodeId
+  case class State[F[_]](nodeId: NodeId, nodesInCluster: Set[NodeId]):
+    // Should cancel any supervised task BEFORE updating the state
+    def modify[B](f: (Term, NodeState) => ((Term, NodeState), F[B])): F[B] =
+      ???
 
-    val nodesInCluster: Set[NodeId]
+    def changes: Stream[F, (Term, NodeState)] =
+      ???
 
-    def modify[B](f: (Term, NodeState) => ((Term, NodeState), F[B])): F[B]
+    // The task supervised here is guaranteed to not change the state
+    // if another process changed it before this completes
+    def supervisedSetIfUnchanged(fs: F[(Term, NodeState)]): F[Unit] =
+      ???
 
-    def onState(
-      leader:      (Term, ConfirmLeader[F]) => F[(Term, NodeState)],
-      onCandidate: Term => F[(Term, NodeState)],
-      onFollower:  Term => F[(Term, NodeState)]
-    ): Stream[F, Unit]
+  enum LeaderEvent derives CanEqual:
+    case Timeout
+    case TermExpired(newTerm: Term)
+    case MajorityReached
+
+  enum CandidateEvent derives CanEqual:
+    case Unknown
+
+  enum FollowerEvent derives CanEqual:
+    case Unknown
 
   def incoming[F[_]: Concurrent: Logger, A](
     processConcurrency: Int,
@@ -76,90 +92,84 @@ object Leadership:
 
   end incoming
 
+  // majorityReachedOrTermExpired
+  //   // Timeout if there is no majority reached or term expired within staleAfter
+  //   .timeoutOnPullTo(staleAfter, Stream(LeaderEvent.Timeout))
+  //   // output an element only if term expired or timeout reached, which will terminate the stream
+  //   .flatMap:
+  //     case LeaderEvent.MajorityReached      => Stream.exec(confirmLeader.leaderConfirmed)
+  //     case LeaderEvent.Timeout              => Stream((term, NodeState.Follower))
+  //     case LeaderEvent.TermExpired(newTerm) => Stream((newTerm, NodeState.Follower))
+  //   .compileFirstOrError
+  def onStateChange[F[_]: Temporal: Logger](
+    state:         State[F],
+    rpc:           RPC[F],
+    confirmLeader: ConfirmLeader[F],
+    heartbeatRate: FiniteDuration,
+    staleAfter:    FiniteDuration
+  ) =
+    state.changes.evalMap:
+      case (term, NodeState.Leader) =>
+        val leader: F[(Term, NodeState)] =
+          leaderBehavior(rpc, state.nodesInCluster, state.nodeId, heartbeatRate, staleAfter, term)
+            .flatMap:
+              case LeaderEvent.MajorityReached      => Stream.exec(confirmLeader.leaderConfirmed)
+              case LeaderEvent.Timeout              => Stream((term, NodeState.Follower))
+              case LeaderEvent.TermExpired(newTerm) => Stream((newTerm, NodeState.Follower))
+            .compileFirstOrError
+        
+        state.supervisedSetIfUnchanged(leader)
+
+
   def leaderBehavior[F[_]](
     rpc:            RPC[F],
     nodesInCluster: Set[NodeId],
     currentNodeId:  NodeId,
     heartbeatRate:  FiniteDuration,
-    staleAfter:     FiniteDuration
+    staleAfter:     FiniteDuration,
+    term:           Term
   )(using
     F:   Temporal[F],
     log: Logger[F]
-  ): (Term, ConfirmLeader[F]) => F[(Term, NodeState)] =
-    enum BroadcastResult:
-      case Timeout
-      case TermExpired(newTerm: Term)
-      case MajorityReached
+  ): Stream[F, LeaderEvent] =
+    // TODO: handle rpc errors
+    def repeatHeartbeat(to: NodeId): Stream[F, (NodeId, HeartbeatResponse)] =
+      repeatOnInterval(
+        heartbeatRate,
+        rpc.heartbeatRequest(to, HeartbeatRequest(currentNodeId, term)).map((to, _))
+      )
 
-    (term, confirmLeader) =>
+    val broadcastHeartbeat: Stream[F, (NodeId, HeartbeatResponse)] =
+      Stream
+        .iterable(nodesInCluster - currentNodeId)
+        .map(repeatHeartbeat)
+        .parJoinUnbounded
 
-      // TODO: handle rpc errors
-      def repeatHeartbeat(to: NodeId): Stream[F, (NodeId, HeartbeatResponse)] =
-        repeatOnInterval(
-          heartbeatRate,
-          rpc.heartbeatRequest(to, HeartbeatRequest(currentNodeId, term)).map((to, _))
-        )
+    // Repeatedly broadcasts heartbeat requests to all other nodes
+    // Emits MajorityReached each time a majority of nodes has succesfully been reached.
+    // After reaching majority once, the count is reset and we attempt to reach majority again (we wait a bit before broadcasting again).
+    // Emits TermExpired if it detects a new term from one of the other nodes
+    val majorityReachedOrTermExpired: Stream[F, LeaderEvent] =
+      broadcastHeartbeat.evalMapFilterAccumulate(Set(currentNodeId)):
+        case (nodes, (node, HeartbeatResponse.Accepted)) =>
+          val newNodes: Set[NodeId] =
+            nodes + node
 
-      val broadcastHeartbeat: Stream[F, (NodeId, HeartbeatResponse)] =
-        Stream
-          .iterable(nodesInCluster - currentNodeId)
-          .map(repeatHeartbeat)
-          .parJoinUnbounded
+          F.pure:
+            if newNodes.size >= (nodesInCluster.size / 2 + 1)
+            then (Set(currentNodeId), Some(LeaderEvent.MajorityReached))
+            else (newNodes, None)
 
-      // Repeatedly broadcasts heartbeat requests to all other nodes
-      // Emits MajorityReached each time a majority of nodes has succesfully been reached.
-      // After reaching majority once, the count is reset and we attempt to reach majority again (we wait a bit before broadcasting again).
-      // Emits TermExpired if it detects a new term from one of the other nodes
-      val majorityReachedOrTermExpired: Stream[F, BroadcastResult] =
-        // A node considers its self as always healthy obviously
-        val initNodeSet: Set[NodeId] = Set(currentNodeId)
-        val majorityCnt: Int         = nodesInCluster.size / 2 + 1
+        case (nodes, (node, HeartbeatResponse.TermExpired(newTerm))) if term >= newTerm =>
+          val warn: F[Unit] = log.logDropped:
+            s"Got TermExpired with non-new term from $node. current: $term, received: $newTerm"
 
-        broadcastHeartbeat.evalMapFilterAccumulate(initNodeSet):
-          case (nodes, (node, HeartbeatResponse.Accepted)) =>
-            val newNodes: Set[NodeId] =
-              nodes + node
+          warn as (nodes, None)
 
-            F.pure:
-              if newNodes.size >= majorityCnt
-              then (initNodeSet, Some(BroadcastResult.MajorityReached))
-              else (newNodes, None)
+        case (nodes, (node, HeartbeatResponse.TermExpired(newTerm))) =>
+          val warn: F[Unit] = log.warn:
+            s"Detected expired term. previous: $term, new: $newTerm"
 
-          case (nodes, (node, HeartbeatResponse.TermExpired(newTerm))) if term >= newTerm =>
-            val warn: F[Unit] = log.logDropped:
-              s"Got TermExpired with non-new term from $node. current: $term, received: $newTerm"
+          warn as (nodes, Some(LeaderEvent.TermExpired(newTerm)))
 
-            warn as (nodes, None)
-
-          case (nodes, (node, HeartbeatResponse.TermExpired(newTerm))) =>
-            val warn: F[Unit] = log.warn:
-              s"Detected expired term. previous: $term, new: $newTerm"
-
-            warn as (nodes, Some(BroadcastResult.TermExpired(newTerm)))
-
-      majorityReachedOrTermExpired
-        // Timeout if there is no majority reached or term expired within staleAfter
-        .timeoutOnPullTo(staleAfter, Stream(BroadcastResult.Timeout))
-        .flatMap:
-          // output an element only if term expired or timeout reached, which will terminate the stream
-          case BroadcastResult.MajorityReached      => Stream.exec(confirmLeader.leaderConfirmed)
-          case BroadcastResult.Timeout              => Stream((term, NodeState.Follower))
-          case BroadcastResult.TermExpired(newTerm) => Stream((newTerm, NodeState.Follower))
-        .compileFirstOrError
-
-  def notifier[F[_]: Temporal: Logger](
-    rpc:     RPC[F],
-    timeout: Timeout[F],
-    state:   State[F]
-  ): Stream[F, Unit] =
-    state.onState(
-      leader = leaderBehavior(
-        rpc,
-        state.nodesInCluster,
-        state.nodeId,
-        timeout.heartbeatRate,
-        timeout.assumeStaleAfter
-      ),
-      onCandidate = ???,
-      onFollower  = ???
-    )
+    majorityReachedOrTermExpired.timeoutOnPullTo(staleAfter, Stream(LeaderEvent.Timeout))
