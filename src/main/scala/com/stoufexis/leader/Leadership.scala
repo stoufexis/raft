@@ -111,7 +111,7 @@ object Leadership:
 
     (term, confirmLeader) =>
       broadcastHeartbeat(term)
-        .evalMapAccumulate(initNodeSet):
+        .evalMapFilterAccumulate(initNodeSet):
           case (nodes, (node, HeartbeatResponse.Accepted)) =>
             val newNodes: Set[NodeId] =
               nodes + node
@@ -132,16 +132,13 @@ object Leadership:
               s"Detected expired term. previous: $term, new: $newTerm"
 
             warn as (nodes, Some(BroadcastResult.TermExpired(newTerm)))
-        .mapFilter(_._2)
         .timeoutOnPullTo(staleAfter, Stream(BroadcastResult.Timeout))
         .flatMap:
           // output an element only if term expired or timeout reached
           case BroadcastResult.MajorityReached      => Stream.exec(confirmLeader.leaderConfirmed)
           case BroadcastResult.Timeout              => Stream((term, NodeState.Follower))
           case BroadcastResult.TermExpired(newTerm) => Stream((newTerm, NodeState.Follower))
-        .take(1)
-        .compile
-        .lastOrError
+        .firstOrError
 
   def notifier[F[_]: Temporal: Logger](
     rpc:     RPC[F],
