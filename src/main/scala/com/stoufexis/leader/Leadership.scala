@@ -37,12 +37,12 @@ object Leadership:
     def modify[B](f: (Term, NodeState) => ((Term, NodeState), F[B])): F[B] =
       ???
 
-    def changes: Stream[F, (Term, NodeState)] =
+    // Schedules the result value. Cancels it if there is a fresh change from elsewhere
+    // before it completes. If it completes, it sets the output as the new state,
+    def changes(f: (Term, NodeState) => F[(Term, NodeState)]): Stream[F, Unit] =
       ???
 
-    // The task supervised here is guaranteed to not change the state
-    // if another process changed it before this completes
-    def supervisedSetIfUnchanged(fs: F[(Term, NodeState)]): F[Unit] =
+    def signalMajorityReached: F[Unit] =
       ???
 
   enum LeaderEvent derives CanEqual:
@@ -104,21 +104,18 @@ object Leadership:
   def onStateChange[F[_]: Temporal: Logger](
     state:         State[F],
     rpc:           RPC[F],
-    confirmLeader: ConfirmLeader[F],
     heartbeatRate: FiniteDuration,
     staleAfter:    FiniteDuration
   ) =
-    state.changes.evalMap:
+    state.changes:
       case (term, NodeState.Leader) =>
-        val leader: F[(Term, NodeState)] =
-          leaderBehavior(rpc, state.nodesInCluster, state.nodeId, heartbeatRate, staleAfter, term)
-            .flatMap:
-              case LeaderEvent.MajorityReached      => Stream.exec(confirmLeader.leaderConfirmed)
-              case LeaderEvent.Timeout              => Stream((term, NodeState.Follower))
-              case LeaderEvent.TermExpired(newTerm) => Stream((newTerm, NodeState.Follower))
-            .compileFirstOrError
+        leaderBehavior(rpc, state.nodesInCluster, state.nodeId, heartbeatRate, staleAfter, term)
+          .flatMap:
+            case LeaderEvent.MajorityReached      => Stream.exec(state.signalMajorityReached)
+            case LeaderEvent.Timeout              => Stream((term, NodeState.Follower))
+            case LeaderEvent.TermExpired(newTerm) => Stream((newTerm, NodeState.Follower))
+          .compileFirstOrError
         
-        state.supervisedSetIfUnchanged(leader)
 
 
   def leaderBehavior[F[_]](
