@@ -23,7 +23,7 @@ extension [F[_], A](stream: Stream[F, A])
     stream.evalMapAccumulate(s)(f).mapFilter(_._2)
 
 extension [F[_], A](stream: Stream[F, A])(using fs2.Compiler[F, F], MonadThrow[F])
-  def firstOrError: F[A] =
+  def compileFirstOrError: F[A] =
     stream.take(1).compile.lastOrError
 
 def repeatOnInterval[F[_]: Temporal, A](
