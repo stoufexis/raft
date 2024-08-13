@@ -18,14 +18,19 @@ object ConfirmedLeader:
 
       confirmLeaderWait: ConfirmLeaderWait[F] = new:
         def waitUntilConfirmed: F[Unit] =
-          Deferred[F, Unit].flatMap(confirms.offer)
+          for
+            deferred <- Deferred[F, Unit]
+            _        <- confirms.offer(deferred)
+            _        <- deferred.get
+          yield ()
 
       confirmLeader: ConfirmLeader[F] = new:
-        def leaderConfirmed: F[Unit] = F.uncancelable: _ =>
+        def leaderConfirmed: F[Unit] =
           def go: F[Unit] =
             confirms.tryTake.flatMap:
               case None           => F.unit
               case Some(deferred) => deferred.complete_ >> go
-          go
+
+          F.uncancelable(_ => go)
         end leaderConfirmed
     yield (confirmLeader, confirmLeaderWait)

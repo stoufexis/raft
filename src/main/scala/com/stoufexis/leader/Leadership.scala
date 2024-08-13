@@ -11,6 +11,7 @@ import org.typelevel.log4cats.Logger
 
 import scala.concurrent.duration.FiniteDuration
 import scala.math.Ordered.orderingToOrdered
+import java.time.LocalDateTime
 
 /** Raft leadership for a single entity
   */
@@ -107,9 +108,9 @@ object Leadership:
 
       // Repeatedly broadcasts heartbeat requests to all other nodes
       // Emits MajorityReached each time a majority of nodes has succesfully been reached.
-      // After reaching majority once, the count is reset and we attempt to reach majority again.
+      // After reaching majority once, the count is reset and we attempt to reach majority again (we wait a bit before broadcasting again).
       // Emits TermExpired if it detects a new term from one of the other nodes
-      val repeatBroacast: Stream[F, BroadcastResult] =
+      val majorityReachedOrTermExpired: Stream[F, BroadcastResult] =
         // A node considers its self as always healthy obviously
         val initNodeSet: Set[NodeId] = Set(currentNodeId)
         val majorityCnt: Int         = nodesInCluster.size / 2 + 1
@@ -136,7 +137,7 @@ object Leadership:
 
             warn as (nodes, Some(BroadcastResult.TermExpired(newTerm)))
 
-      repeatBroacast
+      majorityReachedOrTermExpired
         // Timeout if there is no majority reached or term expired within staleAfter
         .timeoutOnPullTo(staleAfter, Stream(BroadcastResult.Timeout))
         .flatMap:
