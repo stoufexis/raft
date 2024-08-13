@@ -29,7 +29,7 @@ object Leadership:
   trait State[F[_]]:
     val nodeId: NodeId
 
-    val majorityCnt: Int
+    val nodesInCluster: Set[NodeId]
 
     def modify[B](f: (Term, NodeState) => ((Term, NodeState), F[B])): F[B]
 
@@ -76,11 +76,11 @@ object Leadership:
   end incoming
 
   def leaderBehavior[F[_]](
-    rpc:           RPC[F],
-    majorityCnt:   Int,
-    nodeId:        NodeId,
-    heartbeatRate: FiniteDuration,
-    staleAfter:    FiniteDuration
+    rpc:            RPC[F],
+    nodesInCluster: Set[NodeId],
+    currentNodeId:  NodeId,
+    heartbeatRate:  FiniteDuration,
+    staleAfter:     FiniteDuration
   )(using
     F:   Temporal[F],
     log: Logger[F]
@@ -90,19 +90,36 @@ object Leadership:
       case TermExpired(newTerm: Term)
       case MajorityReached
 
+    val majorityCnt = nodesInCluster.size / 2 + 1
+
+    // TODO: handle rpc errors
+    def repeatHeartbeat(to: NodeId, term: Term): Stream[F, (NodeId, HeartbeatResponse)] =
+      repeatOnInterval(
+        heartbeatRate,
+        rpc.heartbeatRequest(to, HeartbeatRequest(currentNodeId, term)).map((to, _))
+      )
+
+    def broadcastHeartbeat(term: Term): Stream[F, (NodeId, HeartbeatResponse)] =
+      Stream
+        .iterable(nodesInCluster - currentNodeId)
+        .map(repeatHeartbeat(_, term))
+        .parJoinUnbounded
+
+    // The current node is of course already considered healthy
+    val initNodeSet: Set[NodeId] =
+      Set(currentNodeId)
+
     (term, confirmLeader) =>
-      repeatOnInterval(heartbeatRate, rpc.heartbeatBroadcast(HeartbeatRequest(nodeId, term)))
-        .evalMapAccumulate(Set.empty[NodeId]):
+      broadcastHeartbeat(term)
+        .evalMapAccumulate(initNodeSet):
           case (nodes, (node, HeartbeatResponse.Accepted)) =>
             val newNodes: Set[NodeId] =
               nodes + node
 
-            val output: Option[BroadcastResult] =
+            F.pure:
               if newNodes.size >= majorityCnt
-              then Some(BroadcastResult.MajorityReached)
-              else None
-
-            F.pure((newNodes, output))
+              then (initNodeSet, Some(BroadcastResult.MajorityReached))
+              else (newNodes, None)
 
           case (nodes, (node, HeartbeatResponse.TermExpired(newTerm))) if term >= newTerm =>
             val warn: F[Unit] = log.logDropped:
@@ -134,7 +151,7 @@ object Leadership:
     state.onState(
       leader = leaderBehavior(
         rpc,
-        state.majorityCnt,
+        state.nodesInCluster,
         state.nodeId,
         timeout.heartbeatRate,
         timeout.assumeStaleAfter

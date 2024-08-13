@@ -20,7 +20,7 @@ extension [F[_]: Monad](deferred: DeferredSink[F, Unit])
   def complete_ : F[Unit] = deferred.complete(()).void
 
 def repeatOnInterval[F[_]: Temporal, A](
-  delay:  FiniteDuration,
-  stream: Stream[F, A]
+  delay: FiniteDuration,
+  fa:    F[A]
 ): Stream[F, A] =
-  (Stream.unit ++ Stream.fixedDelay(delay)) >> stream
+  (Stream.unit ++ Stream.fixedDelay(delay)) >> Stream.eval(fa)

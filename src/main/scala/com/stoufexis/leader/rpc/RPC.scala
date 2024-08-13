@@ -9,11 +9,7 @@ import fs2.Stream
   * known NodeIds.
   */
 trait RPC[F[_]]:
-  def voteBroadcast(request: VoteRequest): Stream[F, (NodeId, VoteResponse)]
-
   def voteRequest(to: NodeId, request: VoteRequest): F[VoteResponse]
-
-  def heartbeatBroadcast(request: HeartbeatRequest): Stream[F, (NodeId, HeartbeatResponse)]
 
   def heartbeatRequest(to: NodeId, request: HeartbeatRequest): F[HeartbeatResponse]
 
