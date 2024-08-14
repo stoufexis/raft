@@ -56,30 +56,30 @@ object Leadership:
       case IncomingHeartbeat(request, sink) =>
         state.update:
           case st @ (term, _) if request.term < term =>
-            None -> sink.complete_(HeartbeatResponse.TermExpired(term))
+            st -> sink.complete_(HeartbeatResponse.TermExpired(term))
 
           case st @ (term, NodeState.Leader) if request.term == term =>
-            None -> Logger[F].logDropped(s"Multiple leaders for the same term $term")
+            st -> Logger[F].logDropped(s"Multiple leaders for the same term $term")
 
           // If a node from the same or greater term claims to be the leader, we recognize it
           // and adopt its term
           case _ =>
-            Some(request.term, NodeState.Follower) -> sink.complete_(HeartbeatResponse.Accepted)
+            (request.term, NodeState.Follower) -> sink.complete_(HeartbeatResponse.Accepted)
 
       case IncomingVoteRequest(request, sink) =>
         state.update:
           case st @ (term, _) if request.term < term =>
-            None -> sink.complete_(VoteResponse.TermExpired(term))
+            st -> sink.complete_(VoteResponse.TermExpired(term))
 
           // This node has voted for its self or another node in this term
           case st @ (term, NodeState.Candidate | NodeState.VotedFollower) if request.term == term =>
-            None -> sink.complete_(VoteResponse.Rejected)
+            st -> sink.complete_(VoteResponse.Rejected)
 
           case st @ (term, _) if request.term == term =>
-            None -> Logger[F].logDropped(s"New election for current term $term")
+            st -> Logger[F].logDropped(s"New election for current term $term")
 
           case _ =>
-            Some(request.term, NodeState.VotedFollower) -> sink.complete_(VoteResponse.Granted)
+            (request.term, NodeState.VotedFollower) -> sink.complete_(VoteResponse.Granted)
 
   end incoming
 

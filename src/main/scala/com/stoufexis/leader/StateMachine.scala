@@ -16,7 +16,7 @@ trait StateMachine[F[_]]:
 object StateMachine:
   trait Update[F[_]]:
     // Should cancel any supervised task BEFORE updating the state
-    def update[B](f: (Term, NodeState) => (Option[(Term, NodeState)], F[B])): F[B]
+    def update[B](f: (Term, NodeState) => ((Term, NodeState), F[B])): F[B]
 
   trait SingleSpotSupervisor[F[_]]:
     def swap(task: F[Unit]): F[Unit]
@@ -83,22 +83,22 @@ object StateMachine:
           ): F[Unit] =
             update: (term, nodeState) =>
               if condition(term, nodeState) then
-                Some(setTerm, setNodeState) -> F.unit
+                (setTerm, setNodeState) -> F.unit
               else
-                None -> F.unit
+                (term, nodeState) -> F.unit
 
-          def update[B](f: (Term, NodeState) => (Option[(Term, NodeState)], F[B])): F[B] =
+          def update[B](f: (Term, NodeState) => ((Term, NodeState), F[B])): F[B] =
             F.uncancelable: poll =>
               for
                 _        <- poll(semaphore.acquire)
                 (t1, n1) <- poll(state.get)
 
-                (maybeNewState, fb) = f(t1, n1)
+                ((t2, n2), fb) = f(t1, n1)
 
-                _ <- maybeNewState match
-                  case None => F.unit
-
-                  case Some((t2, n2)) =>
+                _ <-
+                  if t1 == t2 && n1 == n2 then
+                    F.unit
+                  else
                     val newTask: F[Unit] =
                       for
                         (taskTerm, taskNodeState) <-
