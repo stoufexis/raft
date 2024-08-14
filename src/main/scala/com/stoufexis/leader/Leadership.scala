@@ -31,19 +31,10 @@ trait Leadership[F[_]]:
 
   def waitUntilConfirmedLeader: F[Boolean]
 
+// TODO: general error handling
 object Leadership:
-  case class State[F[_]](nodeId: NodeId, nodesInCluster: Set[NodeId]):
-    // Should cancel any supervised task BEFORE updating the state
-    def modify[B](f: (Term, NodeState) => ((Term, NodeState), F[B])): F[B] =
-      ???
-
-    // Schedules the result value. Cancels it if there is a fresh change from elsewhere
-    // before it completes. If it completes, it sets the output as the new state,
-    def changes(f: (Term, NodeState) => F[(Term, NodeState)]): Stream[F, Unit] =
-      ???
-
-    def signalMajorityReached: F[Unit] =
-      ???
+  val nodeId:         NodeId      = ???
+  val nodesInCluster: Set[NodeId] = ???
 
   enum LeaderEvent derives CanEqual:
     case Timeout
@@ -59,64 +50,53 @@ object Leadership:
   def incoming[F[_]: Concurrent: Logger, A](
     processConcurrency: Int,
     rpc:                RPC[F],
-    state:              State[F]
+    state:              StateMachine.Update[F]
   ): Stream[F, Unit] =
     (rpc.incomingHeartbeatRequests merge rpc.incomingVoteRequests).parEvalMap(processConcurrency):
       case IncomingHeartbeat(request, sink) =>
-        state.modify:
+        state.update:
           case st @ (term, _) if request.term < term =>
-            st -> sink.complete_(HeartbeatResponse.TermExpired(term))
+            None -> sink.complete_(HeartbeatResponse.TermExpired(term))
 
           case st @ (term, NodeState.Leader) if request.term == term =>
-            st -> Logger[F].logDropped(s"Multiple leaders for the same term $term")
+            None -> Logger[F].logDropped(s"Multiple leaders for the same term $term")
 
           // If a node from the same or greater term claims to be the leader, we recognize it
           // and adopt its term
           case _ =>
-            (request.term, NodeState.Follower) -> sink.complete_(HeartbeatResponse.Accepted)
+            Some(request.term, NodeState.Follower) -> sink.complete_(HeartbeatResponse.Accepted)
 
       case IncomingVoteRequest(request, sink) =>
-        state.modify:
+        state.update:
           case st @ (term, _) if request.term < term =>
-            st -> sink.complete_(VoteResponse.TermExpired(term))
+            None -> sink.complete_(VoteResponse.TermExpired(term))
 
           // This node has voted for its self or another node in this term
           case st @ (term, NodeState.Candidate | NodeState.VotedFollower) if request.term == term =>
-            st -> sink.complete_(VoteResponse.Rejected)
+            None -> sink.complete_(VoteResponse.Rejected)
 
           case st @ (term, _) if request.term == term =>
-            st -> Logger[F].logDropped(s"New election for current term $term")
+            None -> Logger[F].logDropped(s"New election for current term $term")
 
           case _ =>
-            (request.term, NodeState.VotedFollower) -> sink.complete_(VoteResponse.Granted)
+            Some(request.term, NodeState.VotedFollower) -> sink.complete_(VoteResponse.Granted)
 
   end incoming
 
-  // majorityReachedOrTermExpired
-  //   // Timeout if there is no majority reached or term expired within staleAfter
-  //   .timeoutOnPullTo(staleAfter, Stream(LeaderEvent.Timeout))
-  //   // output an element only if term expired or timeout reached, which will terminate the stream
-  //   .flatMap:
-  //     case LeaderEvent.MajorityReached      => Stream.exec(confirmLeader.leaderConfirmed)
-  //     case LeaderEvent.Timeout              => Stream((term, NodeState.Follower))
-  //     case LeaderEvent.TermExpired(newTerm) => Stream((newTerm, NodeState.Follower))
-  //   .compileFirstOrError
-  def onStateChange[F[_]: Temporal: Logger](
-    state:         State[F],
+  def applyStateMachine[F[_]: Temporal: Logger](
+    stateMachine:  StateMachine[F],
     rpc:           RPC[F],
     heartbeatRate: FiniteDuration,
     staleAfter:    FiniteDuration
-  ) =
-    state.changes:
-      case (term, NodeState.Leader) =>
-        leaderBehavior(rpc, state.nodesInCluster, state.nodeId, heartbeatRate, staleAfter, term)
+  ): StateMachine.Update[F] =
+    stateMachine:
+      case (term, NodeState.Leader, majorityReached) =>
+        leaderBehavior(rpc, nodesInCluster, nodeId, heartbeatRate, staleAfter, term)
           .flatMap:
-            case LeaderEvent.MajorityReached      => Stream.exec(state.signalMajorityReached)
+            case LeaderEvent.MajorityReached      => Stream.exec(majorityReached.signal)
             case LeaderEvent.Timeout              => Stream((term, NodeState.Follower))
             case LeaderEvent.TermExpired(newTerm) => Stream((newTerm, NodeState.Follower))
           .compileFirstOrError
-        
-
 
   def leaderBehavior[F[_]](
     rpc:            RPC[F],
