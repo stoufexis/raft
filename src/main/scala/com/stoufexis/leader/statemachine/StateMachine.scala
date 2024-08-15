@@ -3,10 +3,11 @@ package com.stoufexis.leader.statemachine
 import cats.effect.kernel.*
 import cats.effect.std.*
 import cats.implicits.given
+import org.typelevel.log4cats.Logger
+
 import com.stoufexis.leader.model.*
 import com.stoufexis.leader.statemachine.ConfirmLeader.AckNack
 import com.stoufexis.leader.statemachine.StateMachine.Update
-import org.typelevel.log4cats.Logger
 
 trait StateMachine[F[_]]:
   def apply(f: (Term, NodeState, AckNack[F]) => F[(Term, NodeState)]): Resource[F, Update[F]]
@@ -26,8 +27,11 @@ object StateMachine:
         supervisor: SingleSpotSupervisor[F] <-
           SingleSpotSupervisor[F]
 
-        state: AtomicCell[F, (Term, NodeState)] <-
-          Resource.eval(AtomicCell[F].of(Term.init, NodeState.Follower))
+        state: Ref[F, (Term, NodeState)] <-
+          Resource.eval(Ref.of(Term.init, NodeState.Follower))
+
+        mutex: Mutex[F] <-
+          Resource.eval(Mutex[F])
 
         confirmLeader: ConfirmLeader[F] <-
           Resource.eval(ConfirmLeader[F])
@@ -45,29 +49,37 @@ object StateMachine:
 
         def update[B](f: (Term, NodeState) => ((Term, NodeState), F[B])): F[B] =
           for
-            postUpdate: F[B] <-
-              state.evalModify: (t1, n1) =>
-                val st @ ((t2, n2), fb) = f(t1, n1)
+            fb: F[B] <-
+              mutex.lock.surround:
+                F.uncancelable: poll =>
+                  for
+                    (t1, n1) <- poll(state.get)
 
-                if t1 == t2 && n1 == n2 then
-                  F.pure(st)
-                else
-                  val nextState: F[(Term, NodeState)] =
-                    confirmLeader.scopedAcks.use: s =>
-                      stateMachine(t2, n2, s)
+                    ((t2, n2), fb) = f(t1, n1)
 
-                  /** When swap executes in this fiber we cannot make sure that the onSuccess of the
-                    * previous task is not just in the process of changing the state. We guard
-                    * against this race condition by only allowing this nextTransition to modify the
-                    * state if it is unchanged. Since reading and updating the state is protected by
-                    * a mutex, if this effect sees the state as unchanged, it is safe to update it.
-                    * Then the onSuccess of the previous task will fail since it executes the same
-                    * condition.
-                    */
-                  val nextTransition: ((Term, NodeState)) => F[Unit] =
-                    (term, nodeState) => setIf((t, n) => t == t2 && n == n2, term, nodeState)
+                    _ <-
+                      if t1 == t2 && n1 == n2 then
+                        F.unit
+                      else
+                        val nextState: F[(Term, NodeState)] =
+                          confirmLeader.scopedAcks.use: acks =>
+                            stateMachine(t2, n2, acks)
 
-                  supervisor.swap(nextState, nextTransition) as st
+                        /** When swap executes in this fiber we cannot make sure that the onSuccess
+                          * of the previous task is not just in the process of changing the state.
+                          * We guard against this race condition by only allowing this
+                          * nextTransition to modify the state if it is unchanged. Since reading and
+                          * updating the state is protected by a mutex, if this effect sees the
+                          * state as unchanged, it is safe to update it. Then the onSuccess of the
+                          * previous task will fail since it executes the same condition.
+                          */
+                        val nextTransition: ((Term, NodeState)) => F[Unit] =
+                          (term, nodeState) => setIf((t, n) => t == t2 && n == n2, term, nodeState)
 
-            b: B <- postUpdate
+                        poll(supervisor.swap(nextState, nextTransition))
+
+                    _ <- state.set(t2, n2)
+                  yield fb
+
+            b: B <- fb
           yield b

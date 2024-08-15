@@ -6,7 +6,7 @@ import cats.implicits.given
 
 class SingleSpotSupervisor[F[_]](
   supervisor:  Supervisor[F],
-  semaphore:   Semaphore[F],
+  mutex:       Mutex[F],
   currentTask: Ref[F, Option[Fiber[F, Throwable, ?]]]
 )(using F: Concurrent[F]):
   // We supervise onSuccess on a separate fiber.
@@ -16,29 +16,23 @@ class SingleSpotSupervisor[F[_]](
   // task fiber terminates.
   // This makes it so users do not have a handle on the onSuccess fiber and cannot guarantee
   // when it gets called, which may give rise to race conditions that should be guarded against.
-  private def superviseAndSet[A](task: F[A], onSuccess: A => F[Unit]): F[Unit] =
-    for
-      fib <- supervisor.supervise(task)
-      post = fib.join.flatMap(_.fold(F.unit, _ => F.unit, _ >>= onSuccess))
-      _ <- supervisor.supervise(post)
-      _ <- currentTask.set(Some(fib))
-    yield ()
 
   def swap[A](task: F[A], onSuccess: A => F[Unit]): F[Unit] =
-    // TODO: Does this uncancellable affect tasks handled by the supervisor?
-    F.uncancelable: poll =>
-      for
-        _        <- poll(semaphore.acquire)
-        existing <- poll(currentTask.get)
-        _        <- existing.fold(F.unit)(_.cancel)
-        _        <- superviseAndSet(task, onSuccess)
-        _        <- semaphore.release
-      yield ()
+    mutex.lock.surround:
+      F.uncancelable: poll =>
+        for
+          existing <- poll(currentTask.get)
+          _        <- existing.fold(F.unit)(_.cancel)
+          fib      <- supervisor.supervise(task)
+          post = fib.join.flatMap(_.fold(F.unit, _ => F.unit, _ >>= onSuccess))
+          _ <- supervisor.supervise(post)
+          _ <- currentTask.set(Some(fib))
+        yield ()
 
 object SingleSpotSupervisor:
   def apply[F[_]: Concurrent]: Resource[F, SingleSpotSupervisor[F]] =
     for
       supervisor  <- Supervisor[F](await = false)
-      semaphore   <- Resource.eval(Semaphore[F](1))
+      mutex       <- Resource.eval(Mutex[F])
       currentTask <- Resource.eval(Ref.of[F, Option[Fiber[F, Throwable, ?]]](None))
-    yield new SingleSpotSupervisor(supervisor, semaphore, currentTask)
+    yield new SingleSpotSupervisor(supervisor, mutex, currentTask)
