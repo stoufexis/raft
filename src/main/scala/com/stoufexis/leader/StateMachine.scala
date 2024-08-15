@@ -5,7 +5,6 @@ import cats.effect.std.*
 import cats.implicits.given
 import com.stoufexis.leader.StateMachine.*
 import com.stoufexis.leader.model.*
-import fs2.*
 import org.typelevel.log4cats.Logger
 
 trait StateMachine[F[_]]:
@@ -19,7 +18,7 @@ object StateMachine:
     def update[B](f: (Term, NodeState) => ((Term, NodeState), F[B])): F[B]
 
   trait SingleSpotSupervisor[F[_]]:
-    def swap(task: F[Unit]): F[Unit]
+    def swap[A](task: F[A], onSuccess: A => F[Unit]): F[Unit]
 
   object SingleSpotSupervisor:
     def apply[F[_]](using F: Concurrent[F]): Resource[F, SingleSpotSupervisor[F]] =
@@ -30,31 +29,26 @@ object StateMachine:
         semaphore: Semaphore[F] <-
           Resource.eval(Semaphore[F](1))
 
-        currentTask: Ref[F, Option[Fiber[F, Throwable, Unit]]] <-
+        currentTask: Ref[F, Option[Fiber[F, Throwable, ?]]] <-
           Resource.eval(Ref.of(None))
       yield new:
-        def swap(task: F[Unit]): F[Unit] =
+        def superviseAndSet[A](task: F[A], onSuccess: A => F[Unit]): F[Unit] =
+          for
+            fib <- supervisor.supervise(task)
+            post = fib.join.flatMap(_.fold(F.unit, _ => F.unit, _ >>= onSuccess))
+            _ <- supervisor.supervise(post)
+            _ <- currentTask.set(Some(fib))
+          yield ()
+
+        def swap[A](task: F[A], onSuccess: A => F[Unit]): F[Unit] =
+          // TODO: Does this uncancellable affect tasks handled by the supervisor?
           F.uncancelable: poll =>
             for
-              _ <- poll(semaphore.acquire)
-
-              t <- poll(currentTask.get)
-
-              _ <- t match
-                case None =>
-                  for
-                    fib <- supervisor.supervise(task)
-                    _   <- currentTask.set(Some(fib))
-                  yield ()
-
-                case Some(existing) =>
-                  for
-                    _   <- existing.cancel
-                    fib <- supervisor.supervise(task)
-                    _   <- currentTask.set(Some(fib))
-                  yield ()
-
-              _ <- semaphore.release
+              _        <- poll(semaphore.acquire)
+              existing <- poll(currentTask.get)
+              cancel   <- existing.fold(F.unit)(_.cancel)
+              _        <- superviseAndSet(task, onSuccess)
+              _        <- semaphore.release
             yield ()
 
   trait SignalMajorityReached[F[_]]:
@@ -99,17 +93,12 @@ object StateMachine:
                   if t1 == t2 && n1 == n2 then
                     F.unit
                   else
-                    val newTask: F[Unit] =
-                      for
-                        (taskTerm, taskNodeState) <-
-                          sm(t2, n2, signalmr)
-
-                        _ <-
-                          setIf((t, n) => t == t2 && n == n2, taskTerm, taskNodeState)
-                      yield ()
-
                     for
-                      _ <- poll(supervisor.swap(newTask))
+                      _ <- poll:
+                        supervisor.swap(
+                          sm(t2, n2, signalmr),
+                          setIf((t, n) => t == t2 && n == n2, _, _)
+                        )
                       _ <- state.set(t2, n2)
                     yield ()
 
