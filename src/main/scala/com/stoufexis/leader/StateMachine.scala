@@ -3,19 +3,24 @@ package com.stoufexis.leader
 import cats.effect.kernel.*
 import cats.effect.std.*
 import cats.implicits.given
+import cats.instances.queue
 import com.stoufexis.leader.StateMachine.*
 import com.stoufexis.leader.model.*
+import com.stoufexis.leader.util.*
+import fs2.Pull
+import fs2.concurrent.Signal
+import fs2.concurrent.SignallingRef
 import org.typelevel.log4cats.Logger
 
 trait StateMachine[F[_]]:
-  def apply(f: (Term, NodeState, SignalMajorityReached[F]) => F[(Term, NodeState)]): Update[F]
-
-  def waitUntilMajorityReached: F[Unit]
+  def apply(f: (Term, NodeState, SignalMajorityReached[F]) => F[(Term, NodeState)]): Resource[F, Update[F]]
 
 object StateMachine:
   trait Update[F[_]]:
     // Should cancel any supervised task BEFORE updating the state
     def update[B](f: (Term, NodeState) => ((Term, NodeState), F[B])): F[B]
+
+    def waitUntilMajorityReached: F[Boolean]
 
   trait SingleSpotSupervisor[F[_]]:
     def swap[A](task: F[A], onSuccess: A => F[Unit]): F[Unit]
@@ -61,63 +66,76 @@ object StateMachine:
   trait SignalMajorityReached[F[_]]:
     def signal: F[Unit]
 
-  def apply[F[_]](using F: Concurrent[F], log: Logger[F]): Resource[F, StateMachine[F]] =
-    for
-      supervisor <- SingleSpotSupervisor[F]
-      semaphore  <- Resource.eval(Semaphore[F](1))
-      state      <- Resource.eval(Ref.of(Term.init, NodeState.Follower))
-    yield new:
-      def waitUntilMajorityReached: F[Unit] =
-        ???
+  def apply[F[_]](using F: Concurrent[F], log: Logger[F]): StateMachine[F] = new:
+    def apply(
+      stateMachine: (Term, NodeState, SignalMajorityReached[F]) => F[(Term, NodeState)]
+    ): Resource[F, Update[F]] =
+      for
+        supervisor: SingleSpotSupervisor[F] <-
+          SingleSpotSupervisor[F]
 
-      def apply(
-        stateMachine: (Term, NodeState, SignalMajorityReached[F]) => F[(Term, NodeState)]
-      ): Update[F] =
-        new:
-          val signalmr: SignalMajorityReached[F] =
-            ???
+        semaphore: Semaphore[F] <-
+          Resource.eval(Semaphore[F](1))
 
-          def setIf(
-            condition:    (Term, NodeState) => Boolean,
-            setTerm:      Term,
-            setNodeState: NodeState
-          ): F[Unit] =
-            update: (term, nodeState) =>
-              if condition(term, nodeState) then
-                (setTerm, setNodeState) -> F.unit
-              else
-                (term, nodeState) -> F.unit
+        state: Ref[F, (Term, NodeState)] <-
+          Resource.eval(Ref.of(Term.init, NodeState.Follower))
 
-          def update[B](f: (Term, NodeState) => ((Term, NodeState), F[B])): F[B] =
-            F.uncancelable: poll =>
-              for
-                _        <- poll(semaphore.acquire)
-                (t1, n1) <- poll(state.get)
+        majorityReachedRef: SignallingRef[F, Boolean] <-
+          Resource.eval(SignallingRef.of[F, Boolean](false))
+      yield new:
+        def waitUntilMajorityReached: F[Boolean] =
+          majorityReachedRef
+            .discrete
+            .take(2)
+            .forall(identity)
+            .compileFirstOrError
 
-                ((t2, n2), fb) = f(t1, n1)
+        val signalmr: SignalMajorityReached[F] = new:
+          def signal: F[Unit] =
+            majorityReachedRef.set(true)
 
-                _ <-
-                  if t1 == t2 && n1 == n2 then
-                    F.unit
-                  else
-                    val nextState: F[(Term, NodeState)] =
-                      stateMachine(t2, n2, signalmr)
+        def setIf(
+          condition:    (Term, NodeState) => Boolean,
+          setTerm:      Term,
+          setNodeState: NodeState
+        ): F[Unit] =
+          update: (term, nodeState) =>
+            if condition(term, nodeState) then
+              (setTerm, setNodeState) -> F.unit
+            else
+              (term, nodeState) -> F.unit
 
-                    // When swap executes in this fiber we cannot make sure that
-                    // the onSuccess of the previous task is not just in the process
-                    // of changing the state. We guard against this race condition
-                    // by only allowing this nextTransition to modify the state if it is unchanged.
-                    // Since reading and updating the state is protected by a semaphore,
-                    // if this effect sees the state as unchanged, it is safe to update it.
-                    // Then the onSuccess of the previous task will fail since it executes the same condition.
-                    val nextTransition: ((Term, NodeState)) => F[Unit] =
-                      (term, nodeState) => setIf((t, n) => t == t2 && n == n2, term, nodeState)
+        def update[B](f: (Term, NodeState) => ((Term, NodeState), F[B])): F[B] =
+          F.uncancelable: poll =>
+            for
+              _        <- poll(semaphore.acquire)
+              (t1, n1) <- poll(state.get)
 
-                    for
-                      _ <- poll(supervisor.swap(nextState, nextTransition))
-                      _ <- state.set(t2, n2)
-                    yield ()
+              ((t2, n2), fb) = f(t1, n1)
 
-                _ <- semaphore.release
-                b <- poll(fb)
-              yield b
+              _ <-
+                if t1 == t2 && n1 == n2 then
+                  F.unit
+                else
+                  val nextState: F[(Term, NodeState)] =
+                    stateMachine(t2, n2, signalmr)
+
+                  // When swap executes in this fiber we cannot make sure that
+                  // the onSuccess of the previous task is not just in the process
+                  // of changing the state. We guard against this race condition
+                  // by only allowing this nextTransition to modify the state if it is unchanged.
+                  // Since reading and updating the state is protected by a semaphore,
+                  // if this effect sees the state as unchanged, it is safe to update it.
+                  // Then the onSuccess of the previous task will fail since it executes the same condition.
+                  val nextTransition: ((Term, NodeState)) => F[Unit] =
+                    (term, nodeState) => setIf((t, n) => t == t2 && n == n2, term, nodeState)
+
+                  for
+                    _ <- poll(majorityReachedRef.set(false))
+                    _ <- poll(supervisor.swap(nextState, nextTransition))
+                    _ <- state.set(t2, n2)
+                  yield ()
+
+              _ <- semaphore.release
+              b <- poll(fb)
+            yield b
