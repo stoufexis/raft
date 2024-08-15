@@ -32,6 +32,13 @@ object StateMachine:
         currentTask: Ref[F, Option[Fiber[F, Throwable, ?]]] <-
           Resource.eval(Ref.of(None))
       yield new:
+        // We supervise onSuccess on a separate fiber.
+        // If it was part of the main supervised fiber and onSuccess its self
+        // called swap, it would attempt to cancel its self, which will probably hang forever
+        // Thus, onSuccess is never cancelled explicitly, it simply gets called whenever the
+        // task fiber terminates.
+        // This makes it so users do not have a handle on the onSuccess fiber and cannot guarantee
+        // when it gets called, which may give rise to race conditions that should be guarded against.
         def superviseAndSet[A](task: F[A], onSuccess: A => F[Unit]): F[Unit] =
           for
             fib <- supervisor.supervise(task)
@@ -46,7 +53,7 @@ object StateMachine:
             for
               _        <- poll(semaphore.acquire)
               existing <- poll(currentTask.get)
-              cancel   <- existing.fold(F.unit)(_.cancel)
+              _        <- existing.fold(F.unit)(_.cancel)
               _        <- superviseAndSet(task, onSuccess)
               _        <- semaphore.release
             yield ()
@@ -64,7 +71,7 @@ object StateMachine:
         ???
 
       def apply(
-        sm: (Term, NodeState, SignalMajorityReached[F]) => F[(Term, NodeState)]
+        stateMachine: (Term, NodeState, SignalMajorityReached[F]) => F[(Term, NodeState)]
       ): Update[F] =
         new:
           val signalmr: SignalMajorityReached[F] =
@@ -93,12 +100,21 @@ object StateMachine:
                   if t1 == t2 && n1 == n2 then
                     F.unit
                   else
+                    val nextState: F[(Term, NodeState)] =
+                      stateMachine(t2, n2, signalmr)
+
+                    // When swap executes in this fiber we cannot make sure that
+                    // the onSuccess of the previous task is not just in the process
+                    // of changing the state. We guard against this race condition
+                    // by only allowing this nextTransition to modify the state if it is unchanged.
+                    // Since reading and updating the state is protected by a semaphore,
+                    // if this effect sees the state as unchanged, it is safe to update it.
+                    // Then the onSuccess of the previous task will fail since it executes the same condition.
+                    val nextTransition: ((Term, NodeState)) => F[Unit] =
+                      (term, nodeState) => setIf((t, n) => t == t2 && n == n2, term, nodeState)
+
                     for
-                      _ <- poll:
-                        supervisor.swap(
-                          sm(t2, n2, signalmr),
-                          setIf((t, n) => t == t2 && n == n2, _, _)
-                        )
+                      _ <- poll(supervisor.swap(nextState, nextTransition))
                       _ <- state.set(t2, n2)
                     yield ()
 
