@@ -4,10 +4,12 @@ import cats.effect.kernel.*
 import cats.effect.std.*
 import cats.implicits.given
 import com.stoufexis.leader.model.*
+import com.stoufexis.leader.statemachine.ConfirmLeader.AckNack
+import com.stoufexis.leader.statemachine.StateMachine.Update
 import org.typelevel.log4cats.Logger
 
 trait StateMachine[F[_]]:
-  def apply(f: (Term, NodeState, F[Unit]) => F[(Term, NodeState)]): Resource[F, StateMachine.Update[F]]
+  def apply(f: (Term, NodeState, AckNack[F]) => F[(Term, NodeState)]): Resource[F, Update[F]]
 
 object StateMachine:
   trait Update[F[_]]:
@@ -18,7 +20,7 @@ object StateMachine:
 
   def apply[F[_]](using F: Concurrent[F], log: Logger[F]): StateMachine[F] = new:
     def apply(
-      stateMachine: (Term, NodeState, F[Unit]) => F[(Term, NodeState)]
+      stateMachine: (Term, NodeState, AckNack[F]) => F[(Term, NodeState)]
     ): Resource[F, Update[F]] =
       for
         supervisor: SingleSpotSupervisor[F] <-
@@ -30,8 +32,8 @@ object StateMachine:
         state: Ref[F, (Term, NodeState)] <-
           Resource.eval(Ref.of(Term.init, NodeState.Follower))
 
-        signalMajorityReached: ResettableCountDownLatch[F] <-
-          Resource.eval(ResettableCountDownLatch[F])
+        signalMajorityReached: ConfirmLeader[F] <-
+          Resource.eval(ConfirmLeader[F])
       yield new:
         def waitUntilMajorityReached: F[Boolean] =
           signalMajorityReached.await
@@ -60,7 +62,7 @@ object StateMachine:
                   F.unit
                 else
                   val nextState: F[(Term, NodeState)] =
-                    signalMajorityReached.scopedAck.use: s =>
+                    signalMajorityReached.scopedAcks.use: s =>
                       stateMachine(t2, n2, s)
 
                   // When swap executes in this fiber we cannot make sure that
@@ -74,7 +76,6 @@ object StateMachine:
                     (term, nodeState) => setIf((t, n) => t == t2 && n == n2, term, nodeState)
 
                   for
-                    _ <- poll(signalMajorityReached.nack)
                     _ <- poll(supervisor.swap(nextState, nextTransition))
                     _ <- state.set(t2, n2)
                   yield ()

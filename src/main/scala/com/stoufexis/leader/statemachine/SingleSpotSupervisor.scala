@@ -1,6 +1,5 @@
 package com.stoufexis.leader.statemachine
 
-import cats.data.Op
 import cats.effect.kernel.*
 import cats.effect.std.*
 import cats.implicits.given

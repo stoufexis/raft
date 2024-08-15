@@ -87,13 +87,15 @@ object Leadership:
     staleAfter:    FiniteDuration
   ): Resource[F, StateMachine.Update[F]] =
     stateMachine:
-      case (term, NodeState.Leader, majorityReached) =>
+      case (term, NodeState.Leader, ackLeader) =>
         leaderBehavior(rpc, nodesInCluster, nodeId, heartbeatRate, staleAfter, term)
           .flatMap:
-            case LeaderEvent.MajorityReached      => Stream.exec(majorityReached)
+            case LeaderEvent.MajorityReached      => Stream.exec(ackLeader.ack)
             case LeaderEvent.Timeout              => Stream((term, NodeState.Follower))
             case LeaderEvent.TermExpired(newTerm) => Stream((newTerm, NodeState.Follower))
           .compileFirstOrError
+
+      case (t, s, ackLeader) => ackLeader.nack as (t, s)
 
   def leaderBehavior[F[_]](
     rpc:            RPC[F],
