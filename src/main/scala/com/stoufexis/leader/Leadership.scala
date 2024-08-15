@@ -2,19 +2,16 @@ package com.stoufexis.leader
 
 import cats.*
 import cats.effect.kernel.*
-import cats.effect.std.Mutex
 import cats.implicits.given
 import com.stoufexis.leader.model.*
 import com.stoufexis.leader.rpc.*
 import com.stoufexis.leader.util.*
+import com.stoufexis.leader.statemachine.*
 import fs2.*
-import fs2.concurrent.SignallingRef
 import org.typelevel.log4cats.Logger
 
 import scala.concurrent.duration.FiniteDuration
 import scala.math.Ordered.orderingToOrdered
-
-import java.time.LocalDateTime
 
 /** Raft leadership for a single entity
   */
@@ -88,12 +85,12 @@ object Leadership:
     rpc:           RPC[F],
     heartbeatRate: FiniteDuration,
     staleAfter:    FiniteDuration
-  ): StateMachine.Update[F] =
+  ): Resource[F, StateMachine.Update[F]] =
     stateMachine:
       case (term, NodeState.Leader, majorityReached) =>
         leaderBehavior(rpc, nodesInCluster, nodeId, heartbeatRate, staleAfter, term)
           .flatMap:
-            case LeaderEvent.MajorityReached      => Stream.exec(majorityReached.signal)
+            case LeaderEvent.MajorityReached      => Stream.exec(majorityReached)
             case LeaderEvent.Timeout              => Stream((term, NodeState.Follower))
             case LeaderEvent.TermExpired(newTerm) => Stream((newTerm, NodeState.Follower))
           .compileFirstOrError
