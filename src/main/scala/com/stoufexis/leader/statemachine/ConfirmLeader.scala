@@ -73,6 +73,10 @@ object ConfirmLeader:
       */
     def nack: F[Unit]
 
+  /**
+    * TODO: This should be a resource that completes all awaits when closing
+    */
+
   def apply[F[_]: Concurrent]: F[ConfirmLeader[F]] =
     Ref.of[F, (Int, Option[Deferred[F, Boolean]])](0, None)
       .map(new ConfirmLeader[F](_))

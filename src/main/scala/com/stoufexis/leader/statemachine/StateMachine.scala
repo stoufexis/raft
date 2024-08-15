@@ -26,60 +26,48 @@ object StateMachine:
         supervisor: SingleSpotSupervisor[F] <-
           SingleSpotSupervisor[F]
 
-        semaphore: Semaphore[F] <-
-          Resource.eval(Semaphore[F](1))
+        state: AtomicCell[F, (Term, NodeState)] <-
+          Resource.eval(AtomicCell[F].of(Term.init, NodeState.Follower))
 
-        state: Ref[F, (Term, NodeState)] <-
-          Resource.eval(Ref.of(Term.init, NodeState.Follower))
-
-        signalMajorityReached: ConfirmLeader[F] <-
+        confirmLeader: ConfirmLeader[F] <-
           Resource.eval(ConfirmLeader[F])
       yield new:
         def waitUntilMajorityReached: F[Boolean] =
-          signalMajorityReached.await
+          confirmLeader.await
 
         def setIf(
-          condition:    (Term, NodeState) => Boolean,
+          cond:         (Term, NodeState) => Boolean,
           setTerm:      Term,
           setNodeState: NodeState
-        ): F[Unit] =
-          update: (term, nodeState) =>
-            if condition(term, nodeState) then
-              (setTerm, setNodeState) -> F.unit
-            else
-              (term, nodeState) -> F.unit
+        ): F[Unit] = update:
+          case (term, nodeState) if cond(term, nodeState) => (setTerm, setNodeState) -> F.unit
+          case (term, nodeState)                          => (term, nodeState) -> F.unit
 
         def update[B](f: (Term, NodeState) => ((Term, NodeState), F[B])): F[B] =
-          F.uncancelable: poll =>
-            for
-              _        <- poll(semaphore.acquire)
-              (t1, n1) <- poll(state.get)
+          for
+            postUpdate: F[B] <-
+              state.evalModify: (t1, n1) =>
+                val st @ ((t2, n2), fb) = f(t1, n1)
 
-              ((t2, n2), fb) = f(t1, n1)
-
-              _ <-
                 if t1 == t2 && n1 == n2 then
-                  F.unit
+                  F.pure(st)
                 else
                   val nextState: F[(Term, NodeState)] =
-                    signalMajorityReached.scopedAcks.use: s =>
+                    confirmLeader.scopedAcks.use: s =>
                       stateMachine(t2, n2, s)
 
-                  // When swap executes in this fiber we cannot make sure that
-                  // the onSuccess of the previous task is not just in the process
-                  // of changing the state. We guard against this race condition
-                  // by only allowing this nextTransition to modify the state if it is unchanged.
-                  // Since reading and updating the state is protected by a semaphore,
-                  // if this effect sees the state as unchanged, it is safe to update it.
-                  // Then the onSuccess of the previous task will fail since it executes the same condition.
+                  /** When swap executes in this fiber we cannot make sure that the onSuccess of the
+                    * previous task is not just in the process of changing the state. We guard
+                    * against this race condition by only allowing this nextTransition to modify the
+                    * state if it is unchanged. Since reading and updating the state is protected by
+                    * a mutex, if this effect sees the state as unchanged, it is safe to update it.
+                    * Then the onSuccess of the previous task will fail since it executes the same
+                    * condition.
+                    */
                   val nextTransition: ((Term, NodeState)) => F[Unit] =
                     (term, nodeState) => setIf((t, n) => t == t2 && n == n2, term, nodeState)
 
-                  for
-                    _ <- poll(supervisor.swap(nextState, nextTransition))
-                    _ <- state.set(t2, n2)
-                  yield ()
+                  supervisor.swap(nextState, nextTransition) as st
 
-              _ <- semaphore.release
-              b <- poll(fb)
-            yield b
+            b: B <- postUpdate
+          yield b
