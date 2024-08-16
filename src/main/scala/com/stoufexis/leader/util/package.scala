@@ -18,6 +18,12 @@ enum ResettableTimeout[A] derives CanEqual:
   case Skip[A]()         extends ResettableTimeout[A]
   case Output[A](out: A) extends ResettableTimeout[A]
 
+  def fold[B](onReset: => B, onSkip: => B, onOutput: A => B): B =
+    this match
+      case Reset()     => onReset
+      case Skip()      => onSkip
+      case Output(out) => onOutput(out)
+
 extension [F[_], A](stream: Stream[F, A])
   // TODO: Test
   def resettableTimeoutAccumulate[S, B](
@@ -25,32 +31,23 @@ extension [F[_], A](stream: Stream[F, A])
     timeout:   FiniteDuration,
     onTimeout: B
   )(f: (S, A) => F[(S, ResettableTimeout[B])])(using Temporal[F]): Stream[F, B] =
-    def go(leftover: Chunk[A], timedPull: Pull.Timed[F, A], s: S): Pull[F, B, Unit] =
-      Pull.pure(leftover).flatMap:
+    def go(leftover: Chunk[A], timed: Pull.Timed[F, A], s: S): Pull[F, B, Unit] =
+      leftover match
         case chunk if chunk.nonEmpty =>
           for
-            (s2, res) <-
-              Pull.eval(f(s, chunk.head.get))
-
-            _ <-
-              res match
-                case ResettableTimeout.Reset()     => timedPull.timeout(timeout)
-                case ResettableTimeout.Skip()      => Pull.pure(())
-                case ResettableTimeout.Output(out) => Pull.output1(out)
-
-            _ <-
-              go(chunk.drop(1), timedPull, s2)
+            (s2, res) <- Pull.eval(f(s, chunk.head.get))
+            _         <- res.fold(timed.timeout(timeout), Pull.pure(()), Pull.output1)
+            _         <- go(chunk.drop(1), timed, s2)
           yield ()
 
         case chunk =>
-          timedPull.uncons.flatMap:
+          timed.uncons.flatMap:
             case None                       => Pull.done
             case Some((Right(chunk), next)) => go(chunk, next, s)
             case Some((Left(_), next))      => Pull.output1(onTimeout) >> go(Chunk.empty, next, s)
     end go
 
-    stream
-      .pull
+    stream.pull
       .timed(t => t.timeout(timeout) >> go(Chunk.empty, t, init))
       .stream
 
