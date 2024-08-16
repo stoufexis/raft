@@ -41,198 +41,166 @@ object Leadership:
     timeout:       Timeout[F],
     confirmLeader: ConfirmLeader[F]
   ): F[Nothing] =
-    val foldDeps: Resource[F, (AckNack[F], FiniteDuration)] =
-      for
-        acks            <- confirmLeader.scopedAcks
-        electionTimeout <- Resource.eval(timeout.nextElectionTimeout)
-      yield (acks, electionTimeout)
-
     def loop(nodeState: NodeState, term: Term): F[Nothing] =
-      def fold(acks: AckNack[F], electionTimeout: FiniteDuration): F[(NodeState, Term)] =
-        nodeState match
-          case st @ NodeState.Leader =>
-            val streams: List[Stream[F, (NodeState, Term)]] = List(
-              leaderHandleHeartbeats(rpc.incomingHeartbeatRequests, term),
-              leaderHandleVoteRequest(rpc.incomingVoteRequests, term),
-              leaderHeartbeater(
-                rpc,
-                acks.ack,
-                nodesInCluster,
-                nodeId,
-                heartbeatRate,
-                staleAfter,
-                term
-              )
-            )
+      val fold: F[(NodeState, Term)] =
+        val resources: Resource[F, (AckNack[F], FiniteDuration)] =
+          confirmLeader
+            .scopedAcks
+            .product(Resource.eval(timeout.nextElectionTimeout))
 
-            acks.ack >> streams.raceFirstOrError
+        resources.use: (acks, electionTimeout) =>
+          def behavior(extra: Stream[F, (NodeState, Term)]*): F[(NodeState, Term)] =
+            raceFirstOrError:
+              handleHeartbeats(nodeState, term, electionTimeout, rpc.incomingHeartbeatRequests) ::
+                handleVoteRequests(nodeState, term, rpc.incomingVoteRequests) ::
+                extra.toList
 
-          case st @ NodeState.Follower =>
-            val streams: List[Stream[F, (NodeState, Term)]] = List(
-              followerHandleHeartbeats(rpc.incomingHeartbeatRequests, term, electionTimeout),
-              followerHandleVoteRequests(rpc.incomingVoteRequests, term)
-            )
+          nodeState match
+            case NodeState.Leader =>
+              val broadcast: Stream[F, (NodeId, HeartbeatResponse)] =
+                rpc.broadcastHeartbeat(term, nodesInCluster, nodeId, heartbeatRate)
 
-            acks.nack >> streams.raceFirstOrError
+              acks.ack >> behavior:
+                leaderHeartbeater(term, broadcast, nodeId, staleAfter, acks.ack)
 
-      end fold
+            case NodeState.Follower =>
+              acks.nack >> behavior()
 
-      foldDeps.use(fold) >>= loop
-
+      fold >>= loop
     end loop
 
     loop(NodeState.Follower, Term.init)
+  end stateMachine
 
-  def leaderHandleHeartbeats[F[_]](
-    incoming: Stream[F, IncomingHeartbeat[F]],
-    term:     Term
-  )(using F: MonadThrow[F], log: Logger[F], c: Compiler[F, F]): Stream[F, (NodeState, Term)] =
-    incoming.evalMapFilter:
-      case IncomingHeartbeat(request, sink) if request.term < term =>
-        for
-          _ <- sink.complete_(HeartbeatResponse.TermExpired(term))
-          _ <- Logger[F].warn(s"Detected stale leader ${request.from}")
-        yield None
-
-      case IncomingHeartbeat(request, sink) if request.term == term =>
-        val state: String =
-          s"Duplicate leaders for term $term"
-
-        for
-          _ <- sink.complete_(HeartbeatResponse.IllegalState(state))
-          _ <- F.raiseError(IllegalStateException(state))
-        yield None
-
-      case IncomingHeartbeat(request, sink) =>
-        for
-          _ <- sink.complete_(HeartbeatResponse.Accepted)
-          _ <- Logger[F].info(s"New leader ${request.from} accepted for term ${request.term}")
-        yield Some(NodeState.Follower, request.term)
-
-  def leaderHandleVoteRequest[F[_]](
-    incoming: Stream[F, IncomingVoteRequest[F]],
-    term:     Term
-  )(using F: MonadThrow[F], log: Logger[F], c: Compiler[F, F]): Stream[F, (NodeState, Term)] =
-    incoming.evalMapFilter:
-      case IncomingVoteRequest(request, sink) if request.term < term =>
-        for
-          _ <- sink.complete_(VoteResponse.TermExpired(term))
-          _ <- log.warn(s"Detected stale candidate ${request.from}")
-        yield None
-
-      case IncomingVoteRequest(request, sink) if request.term == term =>
-        val state: String =
-          s"New election for current term $term"
-
-        for
-          _ <- sink.complete_(VoteResponse.IllegalState(state))
-          _ <- F.raiseError(IllegalStateException(state))
-        yield None
-
-      case IncomingVoteRequest(request, sink) =>
-        for
-          _ <- sink.complete_(VoteResponse.Granted)
-          _ <- log.info(s"Voted for ${request.from} in term ${request.term}")
-        yield Some(NodeState.VotedFollower, request.term)
-
-  def followerHandleHeartbeats[F[_]](
-    incoming:        Stream[F, IncomingHeartbeat[F]],
+  def handleHeartbeats[F[_]](
+    nodeState:       NodeState,
     term:            Term,
-    electionTimeout: FiniteDuration
-  )(using
-    F:   Temporal[F],
-    log: Logger[F]
-  ): Stream[F, (NodeState, Term)] =
-    incoming.resettableTimeout(
-      timeout   = electionTimeout,
-      onTimeout = (NodeState.Candidate, term.next)
-    ):
-      case IncomingHeartbeat(request, sink) if request.term < term =>
-        for
-          _ <- sink.complete_(HeartbeatResponse.TermExpired(term))
-          _ <- Logger[F].warn(s"Detected stale leader ${request.from}")
-        yield ResettableTimeout.Skip()
+    electionTimeout: FiniteDuration,
+    incoming:        Stream[F, IncomingHeartbeat[F]]
+  )(using F: Temporal[F], log: Logger[F]): Stream[F, (NodeState, Term)] =
+    nodeState match
+      case NodeState.Leader =>
+        incoming.evalMapFilter:
+          case IncomingHeartbeat(request, sink) if request.term < term =>
+            for
+              _ <- sink.complete_(HeartbeatResponse.TermExpired(term))
+              _ <- log.warn(s"Detected stale leader ${request.from}")
+            yield None
 
-      case IncomingHeartbeat(request, sink) if request.term == term =>
-        for
-          _ <- sink.complete_(HeartbeatResponse.Accepted)
-          _ <- Logger[F].debug(s"Heartbeat accepted from ${request.from}")
-        yield ResettableTimeout.Reset()
+          case IncomingHeartbeat(request, sink) if request.term == term =>
+            val state: String = s"Duplicate leaders for term $term"
 
-      case IncomingHeartbeat(request, sink) =>
-        for
-          _ <- sink.complete_(HeartbeatResponse.Accepted)
-          _ <- Logger[F].info(s"New leader ${request.from} accepted for term ${request.term}")
-        yield ResettableTimeout.Output(NodeState.Follower, request.term)
+            for
+              _ <- sink.complete_(HeartbeatResponse.IllegalState(state))
+              _ <- F.raiseError(IllegalStateException(state))
+            yield None
 
-  def followerHandleVoteRequests[F[_]](
-    incoming: Stream[F, IncomingVoteRequest[F]],
-    term:     Term
-  )(using F: MonadThrow[F], log: Logger[F], c: Compiler[F, F]): Stream[F, (NodeState, Term)] =
-    incoming.evalMapFilter:
-      case IncomingVoteRequest(request, sink) if request.term < term =>
-        for
-          _ <- sink.complete_(VoteResponse.TermExpired(term))
-          _ <- log.warn(s"Detected stale candidate ${request.from}")
-        yield None
+          case IncomingHeartbeat(request, sink) =>
+            for
+              _ <- sink.complete_(HeartbeatResponse.Accepted)
+              _ <- log.info(s"New leader ${request.from} accepted for term ${request.term}")
+            yield Some(NodeState.Follower, request.term)
 
-      case IncomingVoteRequest(request, sink) if request.term == term =>
-        val state: String =
-          s"New election for current term $term"
+      case NodeState.Follower =>
+        incoming.resettableTimeout(
+          timeout   = electionTimeout,
+          onTimeout = (NodeState.Candidate, term.next)
+        ):
+          case IncomingHeartbeat(request, sink) if request.term < term =>
+            for
+              _ <- sink.complete_(HeartbeatResponse.TermExpired(term))
+              _ <- log.warn(s"Detected stale leader ${request.from}")
+            yield ResettableTimeout.Skip()
 
-        for
-          _ <- sink.complete_(VoteResponse.IllegalState(state))
-          _ <- F.raiseError(IllegalStateException(state))
-        yield None
+          case IncomingHeartbeat(request, sink) if request.term == term =>
+            for
+              _ <- sink.complete_(HeartbeatResponse.Accepted)
+              _ <- log.debug(s"Heartbeat accepted from ${request.from}")
+            yield ResettableTimeout.Reset()
 
-      case IncomingVoteRequest(request, sink) =>
-        for
-          _ <- sink.complete_(VoteResponse.Granted)
-          _ <- log.info(s"Voted for ${request.from} in term ${request.term}")
-        yield Some(NodeState.VotedFollower, request.term)
+          case IncomingHeartbeat(request, sink) =>
+            for
+              _ <- sink.complete_(HeartbeatResponse.Accepted)
+              _ <- log.info(s"New leader ${request.from} accepted for term ${request.term}")
+            yield ResettableTimeout.Output(NodeState.Follower, request.term)
 
+  def handleVoteRequests[F[_]](
+    nodeState: NodeState,
+    term:      Term,
+    incoming:  Stream[F, IncomingVoteRequest[F]]
+  )(using F: Temporal[F], log: Logger[F]): Stream[F, (NodeState, Term)] =
+    nodeState match
+      case NodeState.Leader =>
+        incoming.evalMapFilter:
+          case IncomingVoteRequest(request, sink) if request.term < term =>
+            for
+              _ <- sink.complete_(VoteResponse.TermExpired(term))
+              _ <- log.warn(s"Detected stale candidate ${request.from}")
+            yield None
+
+          case IncomingVoteRequest(request, sink) if request.term == term =>
+            val state: String =
+              s"New election for current term $term"
+
+            for
+              _ <- sink.complete_(VoteResponse.IllegalState(state))
+              _ <- F.raiseError(IllegalStateException(state))
+            yield None
+
+          case IncomingVoteRequest(request, sink) =>
+            for
+              _ <- sink.complete_(VoteResponse.Granted)
+              _ <- log.info(s"Voted for ${request.from} in term ${request.term}")
+            yield Some(NodeState.VotedFollower, request.term)
+
+      case NodeState.Follower =>
+        incoming.evalMapFilter:
+          case IncomingVoteRequest(request, sink) if request.term < term =>
+            for
+              _ <- sink.complete_(VoteResponse.TermExpired(term))
+              _ <- log.warn(s"Detected stale candidate ${request.from}")
+            yield None
+
+          case IncomingVoteRequest(request, sink) if request.term == term =>
+            val state: String =
+              s"New election for current term $term"
+
+            for
+              _ <- sink.complete_(VoteResponse.IllegalState(state))
+              _ <- F.raiseError(IllegalStateException(state))
+            yield None
+
+          case IncomingVoteRequest(request, sink) =>
+            for
+              _ <- sink.complete_(VoteResponse.Granted)
+              _ <- log.info(s"Voted for ${request.from} in term ${request.term}")
+            yield Some(NodeState.VotedFollower, request.term)
+
+  /** Repeatedly broadcasts heartbeat requests to all other nodes. Calls majorityReached each time a
+    * majority of nodes has succesfully been reached. After reaching majority once, the count is
+    * reset and we attempt to reach majority again (we wait a bit before broadcasting again).
+    * Terminates with a new state of follower if staleAfter has been reached or it detects its term
+    * is expired.
+    *
+    * TODO: handle rpc errors
+    */
   def leaderHeartbeater[F[_]](
-    rpc:             RPC[F],
-    majorityReached: F[Unit],
-    nodesInCluster:  Set[NodeId],
-    currentNodeId:   NodeId,
-    heartbeatRate:   FiniteDuration,
+    term:            Term,
+    broadcast:       Stream[F, (NodeId, HeartbeatResponse)],
+    nodeId:          NodeId,
     staleAfter:      FiniteDuration,
-    term:            Term
-  )(using
-    F:   Temporal[F],
-    log: Logger[F]
-  ): Stream[F, (NodeState, Term)] =
-    // TODO: handle rpc errors
-    def repeatHeartbeat(to: NodeId): Stream[F, (NodeId, HeartbeatResponse)] =
-      repeatOnInterval(
-        heartbeatRate,
-        rpc.heartbeatRequest(to, HeartbeatRequest(currentNodeId, term)).map((to, _))
-      )
-
-    val broadcastHeartbeat: Stream[F, (NodeId, HeartbeatResponse)] =
-      Stream
-        .iterable(nodesInCluster - currentNodeId)
-        .map(repeatHeartbeat)
-        .parJoinUnbounded
-
-    /** Repeatedly broadcasts heartbeat requests to all other nodes. Calls majorityReached each time
-      * a majority of nodes has succesfully been reached. After reaching majority once, the count is
-      * reset and we attempt to reach majority again (we wait a bit before broadcasting again).
-      * Terminates with a new state of follower if staleAfter has been reached or it detects its
-      * term is expired.
-      */
-    broadcastHeartbeat.resettableTimeoutAccumulate(
-      init      = Set(currentNodeId),
+    majorityReached: F[Unit]
+  )(using F: Temporal[F], log: Logger[F]): Stream[F, (NodeState, Term)] =
+    broadcast.resettableTimeoutAccumulate(
+      init      = Set(nodeId),
       timeout   = staleAfter,
       onTimeout = (NodeState.Follower, term)
     ):
       case (nodes, (node, HeartbeatResponse.Accepted)) =>
-        val newNodes: Set[NodeId] =
-          nodes + node
+        val newNodes: Set[NodeId] = nodes + node
 
         if newNodes.size >= (nodesInCluster.size / 2 + 1) then
-          majorityReached as (Set(currentNodeId), ResettableTimeout.Reset())
+          majorityReached as (Set(nodeId), ResettableTimeout.Reset())
         else
           F.pure(newNodes, ResettableTimeout.Skip())
 

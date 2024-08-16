@@ -41,14 +41,13 @@ extension [F[_], A](stream: Stream[F, A])
     resettableTimeoutAccumulate((), timeout, onTimeout): (_, a) =>
       f(a).map(((), _))
 
-extension [F[_], A](streams: List[Stream[F, A]])
-  def raceFirstOrError(using Concurrent[F]): F[A] =
-    Stream
-      .iterable(streams.map(_.take(1)))
-      .parJoinUnbounded
-      .take(1)
-      .compile
-      .lastOrError
+def raceFirstOrError[F[_]: Concurrent, A](streams: List[Stream[F, A]]): F[A] =
+  Stream
+    .iterable(streams.map(_.take(1)))
+    .parJoinUnbounded
+    .take(1)
+    .compile
+    .lastOrError
 
 def repeatOnInterval[F[_]: Temporal, A](
   delay: FiniteDuration,
