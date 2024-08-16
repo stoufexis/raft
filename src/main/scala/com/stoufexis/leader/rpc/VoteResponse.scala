@@ -6,3 +6,4 @@ enum VoteResponse:
   case Granted
   case Rejected
   case TermExpired(term: Term)
+  case IllegalState(state: String)

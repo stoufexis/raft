@@ -5,3 +5,4 @@ import com.stoufexis.leader.model.*
 enum HeartbeatResponse derives CanEqual:
   case Accepted
   case TermExpired(newTerm: Term)
+  case IllegalState(state: String)
