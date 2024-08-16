@@ -32,11 +32,13 @@ extension [F[_], A](stream: Stream[F, A])
     onTimeout: B
   )(f: (S, A) => F[(S, ResettableTimeout[B])])(using Temporal[F]): Stream[F, B] =
     def go(leftover: Chunk[A], timed: Pull.Timed[F, A], s: S): Pull[F, B, Unit] =
+      val reset: Pull[F, Nothing, Unit] = timed.timeout(timeout)
+
       leftover match
         case chunk if chunk.nonEmpty =>
           for
             (s2, res) <- Pull.eval(f(s, chunk.head.get))
-            _         <- res.fold(timed.timeout(timeout), Pull.pure(()), Pull.output1)
+            _         <- res.fold(reset, Pull.pure(()), x => reset >> Pull.output1(x))
             _         <- go(chunk.drop(1), timed, s2)
           yield ()
 
