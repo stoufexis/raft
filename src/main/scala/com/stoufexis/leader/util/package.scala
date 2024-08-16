@@ -19,20 +19,40 @@ enum ResettableTimeout[A] derives CanEqual:
   case Output[A](out: A) extends ResettableTimeout[A]
 
 extension [F[_], A](stream: Stream[F, A])
+  // TODO: Test
   def resettableTimeoutAccumulate[S, B](
     init:      S,
     timeout:   FiniteDuration,
     onTimeout: B
   )(f: (S, A) => F[(S, ResettableTimeout[B])])(using Temporal[F]): Stream[F, B] =
+    def go(leftover: Chunk[A], timedPull: Pull.Timed[F, A], s: S): Pull[F, B, Unit] =
+      Pull.pure(leftover).flatMap:
+        case chunk if chunk.nonEmpty =>
+          for
+            (s2, res) <-
+              Pull.eval(f(s, chunk.head.get))
+
+            _ <-
+              res match
+                case ResettableTimeout.Reset()     => timedPull.timeout(timeout)
+                case ResettableTimeout.Skip()      => Pull.pure(())
+                case ResettableTimeout.Output(out) => Pull.output1(out)
+
+            _ <-
+              go(chunk.drop(1), timedPull, s2)
+          yield ()
+
+        case chunk =>
+          timedPull.uncons.flatMap:
+            case None                       => Pull.done
+            case Some((Right(chunk), next)) => go(chunk, next, s)
+            case Some((Left(_), next))      => Pull.output1(onTimeout) >> go(Chunk.empty, next, s)
+    end go
+
     stream
-      .evalMapAccumulate(init): (s, a) =>
-        f(s, a).map[(S, Option[Option[B]])]:
-          case (s2, ResettableTimeout.Reset())   => (s2, Some(None))
-          case (s2, ResettableTimeout.Skip())    => (s2, None)
-          case (s2, ResettableTimeout.Output(b)) => (s2, Some(Some(b)))
-      .mapFilter(_._2)
-      .timeoutOnPullTo(timeout, Stream(Some(onTimeout)))
-      .collect { case Some(b) => b }
+      .pull
+      .timed(t => t.timeout(timeout) >> go(Chunk.empty, t, init))
+      .stream
 
   def resettableTimeout[B](
     timeout:   FiniteDuration,
