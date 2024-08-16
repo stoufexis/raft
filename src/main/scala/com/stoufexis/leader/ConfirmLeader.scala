@@ -1,4 +1,4 @@
-package com.stoufexis.leader.statemachine
+package com.stoufexis.leader
 
 import cats.effect.kernel.*
 import cats.implicits.given
