@@ -23,6 +23,8 @@ trait RPC[F[_]]:
 
 object RPC:
   extension [F[_]: Temporal](rpc: RPC[F])
+    /** TODO: handle rpc errors
+      */
     def broadcastHeartbeat(
       term:        Term,
       nodes:       Set[NodeId],
