@@ -1,6 +1,5 @@
 package com.stoufexis.leader
 
-import ConfirmLeader.AckNack
 import cats.*
 import cats.effect.kernel.*
 import cats.implicits.given
@@ -37,18 +36,12 @@ object Leadership:
   val staleAfter:     FiniteDuration = ???
 
   def stateMachine[F[_]: Temporal: Logger](
-    rpc:           RPC[F],
-    timeout:       Timeout[F],
-    confirmLeader: ConfirmLeader[F]
+    rpc:     RPC[F],
+    timeout: Timeout[F]
   ): F[Nothing] =
     def loop(nodeState: NodeState, term: Term): F[Nothing] =
       val fold: F[(NodeState, Term)] =
-        val resources: Resource[F, (AckNack[F], FiniteDuration)] =
-          confirmLeader
-            .scopedAcks
-            .product(Resource.eval(timeout.nextElectionTimeout))
-
-        resources.use: (acks, electionTimeout) =>
+        timeout.nextElectionTimeout.flatMap: electionTimeout =>
           def behavior(extra: Stream[F, (NodeState, Term)]*): F[(NodeState, Term)] =
             raceFirstOrError:
               handleHeartbeats(nodeState, term, electionTimeout, rpc.incomingHeartbeatRequests) ::
@@ -60,14 +53,17 @@ object Leadership:
               val broadcast: Stream[F, (NodeId, HeartbeatResponse)] =
                 rpc.broadcastHeartbeat(term, nodesInCluster, nodeId, heartbeatRate)
 
-              acks.ack >> behavior:
-                sendHeartbeats(term, broadcast, nodeId, staleAfter, acks.ack)
+              behavior:
+                sendHeartbeats(term, broadcast, nodeId, staleAfter, nodesInCluster)
 
             case NodeState.Follower =>
-              acks.nack >> behavior()
+              behavior()
 
             case NodeState.VotedFollower =>
-              acks.nack >> behavior()
+              behavior()
+
+            case NodeState.VotedFollower =>
+              behavior()
 
       fold >>= loop
     end loop
@@ -107,7 +103,7 @@ object Leadership:
       case NodeState.Follower | NodeState.VotedFollower =>
         incoming.resettableTimeout(
           timeout   = electionTimeout,
-          onTimeout = (NodeState.Candidate, term.next)
+          onTimeout = F.pure(NodeState.Candidate, term.next)
         ):
           case IncomingHeartbeat(request, sink) if request.term < term =>
             for
@@ -214,18 +210,21 @@ object Leadership:
     broadcast:       Stream[F, (NodeId, HeartbeatResponse)],
     nodeId:          NodeId,
     staleAfter:      FiniteDuration,
-    majorityReached: F[Unit]
+    nodesInCluster:  Set[NodeId]
   )(using F: Temporal[F], log: Logger[F]): Stream[F, (NodeState, Term)] =
     broadcast.resettableTimeoutAccumulate(
       init      = Set(nodeId),
       timeout   = staleAfter,
-      onTimeout = (NodeState.Follower, term)
+      onTimeout = F.pure(NodeState.Follower, term)
     ):
       case (nodes, (node, HeartbeatResponse.Accepted)) =>
         val newNodes: Set[NodeId] = nodes + node
 
+        val info: F[Unit] = 
+          log.info("Heatbeats reached the cluster majority")
+
         if newNodes.size >= (nodesInCluster.size / 2 + 1) then
-          majorityReached as (Set(nodeId), ResettableTimeout.Reset())
+          info as (Set(nodeId), ResettableTimeout.Reset())
         else
           F.pure(newNodes, ResettableTimeout.Skip())
 
@@ -245,3 +244,24 @@ object Leadership:
         F.raiseError(IllegalStateException(s"Node $node detected illegal state: $state"))
 
   end sendHeartbeats
+
+  def attemptElection[F[_]](
+    term:            Term,
+    broadcast:       Stream[F, (NodeId, VoteResponse)],
+    nodeId:          NodeId,
+    electionTimeout: FiniteDuration,
+    nodesInCluster:  Set[NodeId]
+  )(using F: Temporal[F], log: Logger[F]) =
+    broadcast.resettableTimeoutAccumulate(
+      init      = Set(nodeId),
+      timeout   = electionTimeout,
+      onTimeout = F.pure(NodeState.Candidate, term.next)
+    ):
+      case (nodes, (node, VoteResponse.Granted)) =>
+        val newNodes: Set[NodeId] = nodes + node
+
+        if newNodes.size >= (nodesInCluster.size / 2 + 1) then
+          log.info(s"Node $nodeId, won election for term $term")
+          F.pure(Set(nodeId), ResettableTimeout.Output(NodeState.Leader, term))
+        else
+          F.pure(newNodes, ResettableTimeout.Skip())

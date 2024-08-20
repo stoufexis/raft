@@ -29,7 +29,7 @@ extension [F[_], A](stream: Stream[F, A])
   def resettableTimeoutAccumulate[S, B](
     init:      S,
     timeout:   FiniteDuration,
-    onTimeout: B
+    onTimeout: F[B]
   )(f: (S, A) => F[(S, ResettableTimeout[B])])(using Temporal[F]): Stream[F, B] =
     def go(leftover: Chunk[A], timed: Pull.Timed[F, A], s: S): Pull[F, B, Unit] =
       val reset: Pull[F, Nothing, Unit] = timed.timeout(timeout)
@@ -44,9 +44,15 @@ extension [F[_], A](stream: Stream[F, A])
 
         case chunk =>
           timed.uncons.flatMap:
-            case None                       => Pull.done
-            case Some((Right(chunk), next)) => go(chunk, next, s)
-            case Some((Left(_), next))      => Pull.output1(onTimeout) >> go(Chunk.empty, next, s)
+            case None =>
+              Pull.done
+
+            case Some((Right(chunk), next)) =>
+              go(chunk, next, s)
+
+            case Some((Left(_), next)) =>
+              Pull.eval(onTimeout).flatMap: b =>
+                Pull.output1(b) >> reset >> go(Chunk.empty, next, s)
     end go
 
     stream.pull
@@ -55,7 +61,7 @@ extension [F[_], A](stream: Stream[F, A])
 
   def resettableTimeout[B](
     timeout:   FiniteDuration,
-    onTimeout: B
+    onTimeout: F[B]
   )(f: A => F[ResettableTimeout[B]])(using Temporal[F]): Stream[F, B] =
     resettableTimeoutAccumulate((), timeout, onTimeout): (_, a) =>
       f(a).map(((), _))
