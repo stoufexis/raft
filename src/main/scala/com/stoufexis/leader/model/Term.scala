@@ -7,6 +7,7 @@ object Term:
 
   extension (term: Term)
     def next: Term = term + 1
+    def toInt: Int = term
 
   given Ordering[Term] = Ordering.Int
   given CanEqual[Term, Term] = CanEqual.derived

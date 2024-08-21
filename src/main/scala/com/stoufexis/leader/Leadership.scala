@@ -5,6 +5,7 @@ import cats.effect.kernel.*
 import cats.implicits.given
 import fs2.*
 import org.typelevel.log4cats.Logger
+import org.typelevel.log4cats.slf4j.Slf4jLogger
 
 import com.stoufexis.leader.model.*
 import com.stoufexis.leader.rpc.*
@@ -31,7 +32,7 @@ trait Leadership[F[_]]:
 // TODO: general error handling
 object Leadership:
 
-  def stateMachine[F[_]: Temporal: Logger](
+  def stateMachine[F[_]: Async](
     rpc:           RPC[F],
     timeout:       Timeout[F],
     nodes:         Nodes,
@@ -41,33 +42,41 @@ object Leadership:
   ): F[Nothing] =
     def loop(nodeState: NodeState, term: Term): F[Nothing] =
       val fold: F[(NodeState, Term)] =
-        timeout.nextElectionTimeout.flatMap: electionTimeout =>
-          def behavior(extra: Stream[F, (NodeState, Term)]*): F[(NodeState, Term)] =
-            raceFirstOrError:
-              handleHeartbeats(nodeState, term, electionTimeout, rpc.incomingHeartbeatRequests) ::
+        for
+          given Logger[F] <-
+            Slf4jLogger.fromName[F](nodeState.print(term))
+
+          electionTimeout: FiniteDuration <-
+            timeout.nextElectionTimeout
+
+          output <-
+            def behavior(extra: Stream[F, (NodeState, Term)]*): F[(NodeState, Term)] =
+              raceFirstOrError:
+                handleHeartbeats(nodeState, term, electionTimeout, rpc.incomingHeartbeatRequests) ::
                 handleVoteRequests(nodeState, term, rpc.incomingVoteRequests) ::
                 extra.toList
 
-          nodeState match
-            case NodeState.Leader =>
-              val broadcast: Stream[F, (NodeId, HeartbeatResponse)] =
-                rpc.broadcastHeartbeat(term, nodes, heartbeatRate)
+            nodeState match
+              case NodeState.Leader =>
+                val broadcast: Stream[F, (NodeId, HeartbeatResponse)] =
+                  rpc.broadcastHeartbeat(term, nodes, heartbeatRate)
 
-              behavior:
-                sendHeartbeats(term, broadcast, nodes, staleAfter)
+                behavior:
+                  sendHeartbeats(term, broadcast, nodes, staleAfter)
 
-            case NodeState.Follower =>
-              behavior()
+              case NodeState.Follower =>
+                behavior()
 
-            case NodeState.VotedFollower =>
-              behavior()
+              case NodeState.VotedFollower =>
+                behavior()
 
-            case NodeState.Candidate =>
-              val broadcast: Stream[F, (NodeId, VoteResponse)] =
-                rpc.broadcastVote(term, nodes, heartbeatRate)
+              case NodeState.Candidate =>
+                val broadcast: Stream[F, (NodeId, VoteResponse)] =
+                  rpc.broadcastVote(term, nodes, heartbeatRate)
 
-              behavior:
-                attemptElection(term, broadcast, nodes, staleAfter)
+                behavior:
+                  attemptElection(term, broadcast, nodes, staleAfter)
+        yield output
 
       fold >>= loop
     end loop
@@ -91,7 +100,7 @@ object Leadership:
             yield None
 
           case IncomingHeartbeat(request, sink) if request.term == term =>
-            val state: String = s"Duplicate leaders for term $term"
+            val state: String = s"Duplicate leaders for term"
 
             for
               _ <- sink.complete_(HeartbeatResponse.IllegalState(state))
@@ -220,7 +229,8 @@ object Leadership:
       onTimeout = F.pure(NodeState.Follower, term)
     ):
       case (externals, (external, HeartbeatResponse.Accepted)) =>
-        val newExternals: Set[NodeId] = externals + external
+        val newExternals: Set[NodeId] =
+          externals + external
 
         val info: F[Unit] =
           log.info("Heatbeats reached the cluster majority")
@@ -232,13 +242,13 @@ object Leadership:
 
       case (externals, (external, HeartbeatResponse.TermExpired(newTerm))) if term >= newTerm =>
         val warn: F[Unit] = log.warn:
-          s"Got TermExpired with non-new term from $external. current: $term, received: $newTerm"
+          s"Got TermExpired with expired term $newTerm from $external"
 
         warn as (externals, ResettableTimeout.Skip())
 
       case (externals, (external, HeartbeatResponse.TermExpired(newTerm))) =>
         val warn: F[Unit] = log.warn:
-          s"Detected expired term. previous: $term, new: $newTerm"
+          s"Current term expired, new term: $newTerm"
 
         warn as (externals, ResettableTimeout.Output(NodeState.Follower, newTerm))
 
@@ -259,7 +269,8 @@ object Leadership:
       onTimeout = F.pure(NodeState.Candidate, term.next)
     ):
       case (externals, (external, VoteResponse.Granted)) =>
-        val newExternals: Set[NodeId] = externals + external
+        val newExternals: Set[NodeId] =
+          externals + external
 
         val info: F[Unit] =
           log.info(s"Won election")
@@ -277,7 +288,7 @@ object Leadership:
 
       case (externals, (external, VoteResponse.TermExpired(newTerm))) =>
         val warn: F[Unit] = log.warn:
-          s"Detected expired term. previous: $term, new: $newTerm"
+          s"Current term expired, new term: $newTerm"
 
         warn as (externals, ResettableTimeout.Output(NodeState.Follower, newTerm))
 
