@@ -22,20 +22,37 @@ trait RPC[F[_]]:
   def incomingHeartbeatRequests: Stream[F, IncomingHeartbeat[F]]
 
 object RPC:
+  def joinForEach[F[_]: Concurrent, A](
+    tos: Set[NodeId]
+  )(
+    f: NodeId => Stream[F, A]
+  ): Stream[F, (NodeId, A)] =
+    Stream
+      .iterable(tos)
+      .map(to => f(to).map((to, _)))
+      .parJoinUnbounded
+
+  /** TODO: handle rpc errors
+    */
   extension [F[_]: Temporal](rpc: RPC[F])
-    /** TODO: handle rpc errors
-      */
     def broadcastHeartbeat(
       term:        Term,
-      nodes:       Set[NodeId],
-      currentNode: NodeId,
+      nodes:       Nodes,
       repeatEvery: FiniteDuration
     ): Stream[F, (NodeId, HeartbeatResponse)] =
-      Stream
-        .iterable(nodes - currentNode)
-        .map: to =>
-          repeatOnInterval(
-            repeatEvery,
-            rpc.heartbeatRequest(to, HeartbeatRequest(currentNode, term)).map((to, _))
-          )
-        .parJoinUnbounded
+      joinForEach(nodes.otherNodes): to =>
+        repeatOnInterval(
+          repeatEvery,
+          rpc.heartbeatRequest(to, HeartbeatRequest(nodes.currentNode, term))
+        )
+
+    def broadcastVote(
+      term:        Term,
+      nodes:       Nodes,
+      repeatEvery: FiniteDuration
+    ): Stream[F, (NodeId, VoteResponse)] =
+      joinForEach(nodes.otherNodes): to =>
+        repeatOnInterval(
+          repeatEvery,
+          rpc.voteRequest(to, VoteRequest(nodes.currentNode, term))
+        )
