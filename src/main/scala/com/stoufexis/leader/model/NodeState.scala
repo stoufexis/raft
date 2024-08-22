@@ -18,6 +18,12 @@ case class NodeState(role: Role, term: Term, currentNode: NodeId, otherNodes: Se
   def isNotNew(otherTerm: Term): Boolean =
     !isNew(otherTerm)
 
+  def isExpired(otherTerm: Term): Boolean =
+    otherTerm < term
+
+  def isCurrent(otherTerm: Term): Boolean =
+    otherTerm == term
+
   def transition(newRole: Role): NodeState =
     copy(role = newRole)
 

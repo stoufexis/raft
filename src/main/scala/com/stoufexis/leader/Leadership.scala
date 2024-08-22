@@ -88,13 +88,13 @@ object Leadership:
     state.role match
       case Role.Leader =>
         incoming.evalMapFilter:
-          case IncomingHeartbeat(request, sink) if request.term < state.term =>
+          case IncomingHeartbeat(request, sink) if state.isExpired(request.term) =>
             for
               _ <- sink.complete_(HeartbeatResponse.TermExpired(state.term))
               _ <- log.warn(s"Detected stale leader ${request.from}")
             yield None
 
-          case IncomingHeartbeat(request, sink) if request.term == state.term =>
+          case IncomingHeartbeat(request, sink) if state.isCurrent(request.term) =>
             for
               state <- F.pure("Duplicate leaders for term")
               _     <- sink.complete_(HeartbeatResponse.IllegalState(state))
@@ -112,13 +112,13 @@ object Leadership:
           timeout   = electionTimeout,
           onTimeout = F.pure(state.transition(Role.Candidate, _.next))
         ):
-          case IncomingHeartbeat(request, sink) if request.term < state.term =>
+          case IncomingHeartbeat(request, sink) if state.isExpired(request.term) =>
             for
               _ <- sink.complete_(HeartbeatResponse.TermExpired(state.term))
               _ <- log.warn(s"Detected stale leader ${request.from}")
             yield ResettableTimeout.Skip()
 
-          case IncomingHeartbeat(request, sink) if request.term == state.term =>
+          case IncomingHeartbeat(request, sink) if state.isCurrent(request.term) =>
             for
               _ <- sink.complete_(HeartbeatResponse.Accepted)
               _ <- log.debug(s"Heartbeat accepted from ${request.from}")
@@ -137,13 +137,13 @@ object Leadership:
     state.role match
       case Role.Leader =>
         incoming.evalMapFilter:
-          case IncomingVoteRequest(request, sink) if request.term < state.term =>
+          case IncomingVoteRequest(request, sink) if state.isExpired(request.term) =>
             for
               _ <- sink.complete_(VoteResponse.TermExpired(state.term))
               _ <- log.warn(s"Detected stale candidate ${request.from}")
             yield None
 
-          case IncomingVoteRequest(request, sink) if request.term == state.term =>
+          case IncomingVoteRequest(request, sink) if state.isCurrent(request.term) =>
             for
               msg <- F.pure(s"New election for current term ${state.term}")
               _   <- sink.complete_(VoteResponse.IllegalState(msg))
@@ -158,7 +158,7 @@ object Leadership:
 
       case Role.Follower =>
         incoming.evalMapFilter:
-          case IncomingVoteRequest(request, sink) if request.term < state.term =>
+          case IncomingVoteRequest(request, sink) if state.isExpired(request.term) =>
             for
               _ <- sink.complete_(VoteResponse.TermExpired(state.term))
               _ <- log.warn(s"Detected stale candidate ${request.from}")
@@ -179,13 +179,13 @@ object Leadership:
 
       case Role.VotedFollower =>
         incoming.evalMapFilter:
-          case IncomingVoteRequest(request, sink) if request.term < state.term =>
+          case IncomingVoteRequest(request, sink) if state.isExpired(request.term) =>
             for
               _ <- sink.complete_(VoteResponse.TermExpired(state.term))
               _ <- log.warn(s"Detected stale candidate ${request.from}")
             yield None
 
-          case IncomingVoteRequest(request, sink) if request.term == state.term =>
+          case IncomingVoteRequest(request, sink) if state.isCurrent(request.term) =>
             for
               msg <- F.pure(s"New election for current term ${state.term}")
               _   <- sink.complete_(VoteResponse.IllegalState(msg))
