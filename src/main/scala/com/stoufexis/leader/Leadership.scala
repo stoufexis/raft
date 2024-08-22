@@ -12,7 +12,6 @@ import com.stoufexis.leader.rpc.*
 import com.stoufexis.leader.util.*
 
 import scala.concurrent.duration.FiniteDuration
-import scala.math.Ordered.orderingToOrdered
 
 /** Raft leadership for a single entity
   */
@@ -71,6 +70,8 @@ object Leadership:
 
         newState: NodeState <-
           raceFirstOrError(constStreams ++ specificStream)
+
+        _ <- Logger[F].info(s"Transitioning to ${newState.print}")
       yield newState) >>= loop
 
     loop(initState)
