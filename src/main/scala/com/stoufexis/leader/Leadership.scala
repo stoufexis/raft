@@ -107,7 +107,7 @@ object Leadership:
               _ <- log.info(s"New leader ${request.from} accepted for term ${request.term}")
             yield Some(state.transition(Role.Follower, _ => request.term))
 
-      case Role.Follower | Role.VotedFollower =>
+      case Role.Follower =>
         incoming.resettableTimeout(
           timeout   = electionTimeout,
           onTimeout = F.pure(state.transition(Role.Candidate, _.next))
@@ -130,6 +130,20 @@ object Leadership:
               _ <- log.info(s"New leader ${request.from} accepted for term ${request.term}")
             yield ResettableTimeout.Output(state.transition(Role.Follower, _ => request.term))
 
+      case Role.Candidate | Role.VotedFollower =>
+        incoming.evalMapFilter:
+          case IncomingHeartbeat(request, sink) if state.isExpired(request.term) =>
+            for
+              _ <- sink.complete_(HeartbeatResponse.TermExpired(state.term))
+              _ <- log.warn(s"Detected stale leader ${request.from}")
+            yield None
+
+          case IncomingHeartbeat(request, sink) =>
+            for
+              _ <- sink.complete_(HeartbeatResponse.Accepted)
+              _ <- log.info(s"New leader ${request.from} accepted for term ${request.term}")
+            yield Some(state.transition(Role.Follower, _ => request.term))
+
   def handleVoteRequests[F[_]](
     state:    NodeState,
     incoming: Stream[F, IncomingVoteRequest[F]]
@@ -145,9 +159,8 @@ object Leadership:
 
           case IncomingVoteRequest(request, sink) if state.isCurrent(request.term) =>
             for
-              msg <- F.pure(s"New election for current term ${state.term}")
-              _   <- sink.complete_(VoteResponse.IllegalState(msg))
-              _   <- F.raiseError(IllegalStateException(msg))
+              _   <- sink.complete_(VoteResponse.Rejected)
+              _   <- log.info(s"Rejected vote request of ${request.from}")
             yield None
 
           case IncomingVoteRequest(request, sink) =>
@@ -177,19 +190,12 @@ object Leadership:
               _ <- log.info(s"Voted for ${request.from} in term ${request.term}")
             yield Some(state.transition(Role.VotedFollower, _ => request.term))
 
-      case Role.VotedFollower =>
+      case Role.VotedFollower | Role.Candidate =>
         incoming.evalMapFilter:
           case IncomingVoteRequest(request, sink) if state.isExpired(request.term) =>
             for
               _ <- sink.complete_(VoteResponse.TermExpired(state.term))
               _ <- log.warn(s"Detected stale candidate ${request.from}")
-            yield None
-
-          case IncomingVoteRequest(request, sink) if state.isCurrent(request.term) =>
-            for
-              msg <- F.pure(s"New election for current term ${state.term}")
-              _   <- sink.complete_(VoteResponse.IllegalState(msg))
-              _   <- F.raiseError(IllegalStateException(msg))
             yield None
 
           case IncomingVoteRequest(request, sink) =>
