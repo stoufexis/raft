@@ -22,37 +22,30 @@ trait RPC[F[_]]:
   def incomingHeartbeatRequests: Stream[F, IncomingHeartbeat[F]]
 
 object RPC:
-  def joinForEach[F[_]: Concurrent, A](
-    tos: Set[NodeId]
+  def joinForEach[F[_]: Temporal, A](
+    tos:         Set[NodeId],
+    repeatEvery: FiniteDuration
   )(
-    f: NodeId => Stream[F, A]
+    f: NodeId => F[A]
   ): Stream[F, (NodeId, A)] =
     Stream
       .iterable(tos)
-      .map(to => f(to).map((to, _)))
+      .map(to => repeatOnInterval(repeatEvery, f(to)).map((to, _)))
       .parJoinUnbounded
 
   /** TODO: handle rpc errors
     */
   extension [F[_]: Temporal](rpc: RPC[F])
     def broadcastHeartbeat(
-      term:        Term,
-      nodes:       Nodes,
+      nodeState:   NodeState,
       repeatEvery: FiniteDuration
     ): Stream[F, (NodeId, HeartbeatResponse)] =
-      joinForEach(nodes.otherNodes): to =>
-        repeatOnInterval(
-          repeatEvery,
-          rpc.heartbeatRequest(to, HeartbeatRequest(nodes.currentNode, term))
-        )
+      joinForEach(nodeState.otherNodes, repeatEvery): to =>
+        rpc.heartbeatRequest(to, HeartbeatRequest(nodeState.currentNode, nodeState.term))
 
     def broadcastVote(
-      term:        Term,
-      nodes:       Nodes,
+      nodeState:   NodeState,
       repeatEvery: FiniteDuration
     ): Stream[F, (NodeId, VoteResponse)] =
-      joinForEach(nodes.otherNodes): to =>
-        repeatOnInterval(
-          repeatEvery,
-          rpc.voteRequest(to, VoteRequest(nodes.currentNode, term))
-        )
+      joinForEach(nodeState.otherNodes, repeatEvery): to =>
+        rpc.voteRequest(to, VoteRequest(nodeState.currentNode, nodeState.term))
