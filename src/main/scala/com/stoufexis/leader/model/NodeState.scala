@@ -26,7 +26,3 @@ case class NodeState(role: Role, term: Term, currentNode: NodeId, otherNodes: Se
 
   def transition(newRole: Role): NodeState =
     copy(role = newRole)
-
-object NodeState:
-  def init(currentNode: NodeId, otherNodes: Set[NodeId]): NodeState =
-    NodeState(Role.Follower, Term.init, currentNode, otherNodes)

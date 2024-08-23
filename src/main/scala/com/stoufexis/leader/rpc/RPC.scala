@@ -1,11 +1,8 @@
 package com.stoufexis.leader.rpc
 
-import cats.effect.kernel.*
-import cats.implicits.given
 import fs2.Stream
 
-import com.stoufexis.leader.model.*
-import com.stoufexis.leader.util.*
+import com.stoufexis.leader.model.NodeId
 
 import scala.concurrent.duration.FiniteDuration
 
@@ -13,39 +10,16 @@ import scala.concurrent.duration.FiniteDuration
   * cluster, so only known NodeIds.
   */
 trait RPC[F[_]]:
-  def voteRequest(to: NodeId, request: VoteRequest): F[VoteResponse]
+  def broadcastVotes(
+    repeat:  FiniteDuration,
+    request: RequestVote
+  ): Stream[F, (NodeId, VoteResponse)]
 
-  def heartbeatRequest(to: NodeId, request: HeartbeatRequest): F[HeartbeatResponse]
+  def broadcastAppends(
+    repeat:  FiniteDuration,
+    request: AppendEntries
+  ): Stream[F, (NodeId, AppendResponse)]
 
-  def incomingVoteRequests: Stream[F, IncomingVoteRequest[F]]
+  def incomingVotes: Stream[F, IncomingVote[F]]
 
-  def incomingHeartbeatRequests: Stream[F, IncomingHeartbeat[F]]
-
-object RPC:
-  def joinForEach[F[_]: Temporal, A](
-    tos:         Set[NodeId],
-    repeatEvery: FiniteDuration
-  )(
-    f: NodeId => F[A]
-  ): Stream[F, (NodeId, A)] =
-    Stream
-      .iterable(tos)
-      .map(to => repeatOnInterval(repeatEvery, f(to)).map((to, _)))
-      .parJoinUnbounded
-
-  /** TODO: handle rpc errors
-    */
-  extension [F[_]: Temporal](rpc: RPC[F])
-    def broadcastHeartbeat(
-      nodeState:   NodeState,
-      repeatEvery: FiniteDuration
-    ): Stream[F, (NodeId, HeartbeatResponse)] =
-      joinForEach(nodeState.otherNodes, repeatEvery): to =>
-        rpc.heartbeatRequest(to, HeartbeatRequest(nodeState.currentNode, nodeState.term))
-
-    def broadcastVote(
-      nodeState:   NodeState,
-      repeatEvery: FiniteDuration
-    ): Stream[F, (NodeId, VoteResponse)] =
-      joinForEach(nodeState.otherNodes, repeatEvery): to =>
-        rpc.voteRequest(to, VoteRequest(nodeState.currentNode, nodeState.term))
+  def incomingAppends: Stream[F, IncomingAppend[F]]

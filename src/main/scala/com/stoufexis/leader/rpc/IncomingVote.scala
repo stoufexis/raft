@@ -2,7 +2,7 @@ package com.stoufexis.leader.rpc
 
 import cats.effect.kernel.DeferredSink
 
-case class IncomingVoteRequest[F[_]](
-  request: VoteRequest,
+case class IncomingVote[F[_]](
+  request: RequestVote,
   sink:    DeferredSink[F, VoteResponse]
 )

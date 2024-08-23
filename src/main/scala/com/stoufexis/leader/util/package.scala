@@ -79,3 +79,12 @@ def repeatOnInterval[F[_]: Temporal, A](
   fa:    F[A]
 ): Stream[F, A] =
   (Stream.unit ++ Stream.fixedDelay(delay)) >> Stream.eval(fa)
+
+def parRepeat[F[_]: Temporal, A, B](
+  tos:         Iterable[B],
+  repeatEvery: FiniteDuration
+)(f: B => F[A]): Stream[F, (B, A)] =
+  Stream
+    .iterable(tos)
+    .map(to => repeatOnInterval(repeatEvery, f(to)).map((to, _)))
+    .parJoinUnbounded
