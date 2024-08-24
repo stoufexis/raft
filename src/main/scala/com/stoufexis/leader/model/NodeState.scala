@@ -1,6 +1,6 @@
 package com.stoufexis.leader.model
 
-import com.stoufexis.leader.typeclass.Increasing.*
+import com.stoufexis.leader.typeclass.Counter.*
 
 case class NodeInfo[S](
   role:           Role,

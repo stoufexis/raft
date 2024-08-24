@@ -7,16 +7,16 @@ import cats.effect.std.QueueSink
 import cats.effect.std.QueueSource
 import cats.implicits.given
 import fs2.*
+import fs2.concurrent.SignallingRef
 import org.typelevel.log4cats.Logger
 
 import com.stoufexis.leader.model.*
 import com.stoufexis.leader.rpc.*
 import com.stoufexis.leader.service.*
-import com.stoufexis.leader.typeclass.Increasing.*
+import com.stoufexis.leader.typeclass.Counter.*
 import com.stoufexis.leader.util.*
 
 import scala.concurrent.duration.FiniteDuration
-import fs2.concurrent.SignallingRef
 
 trait Raft[F[_], A, S]:
   // If current node is not the leader, return the leader id
@@ -153,11 +153,79 @@ object Raft:
         case IncomingVote(req, sink) =>
           req.grant(sink) as Some(state.transition(Role.VotedFollower, req.term))
 
-    
     // TODO heartbeats
-    def committer(localLog: LocalLog[F, A]) = ???
+    def appender(localLog: LocalLog[F, A]) =
+      def seek(matchIdx: Index, commitIdx: Index, node: NodeId): F[Either[Term, Index]] =
+        val response: F[AppendResponse] =
+          for
+            prevLogTerm: Term <-
+              log.term(matchIdx)
 
+            request: AppendEntries[A] =
+              AppendEntries(
+                leaderId     = state.currentNode,
+                term         = state.term,
+                prevLogIndex = matchIdx,
+                prevLogTerm  = prevLogTerm,
+                leaderCommit = commitIdx,
+                entries      = Chunk.empty[A]
+              )
 
+            response: AppendResponse <-
+              rpc.appendEntries(node, request)
+          yield response
+
+        response.flatMap:
+          case AppendResponse.Accepted             => send(matchIdx, commitIdx, node)
+          case AppendResponse.NotConsistent        => seek(matchIdx.previous, commitIdx, node)
+          case AppendResponse.TermExpired(newTerm) => F.pure(Left(newTerm))
+          case AppendResponse.IllegalState(state)  => F.raiseError(IllegalStateException(state))
+      end seek
+
+      def send(matchIdx: Index, commitIdx: Index, node: NodeId): F[Either[Term, Index]] =
+        val response: F[(AppendResponse, Index)] =
+          for
+            (prevLogTerm, entries) <-
+              log.entriesAfter(matchIdx)
+
+            request: AppendEntries[A] =
+              AppendEntries(
+                leaderId     = state.currentNode,
+                term         = state.term,
+                prevLogIndex = matchIdx,
+                prevLogTerm  = prevLogTerm,
+                leaderCommit = commitIdx,
+                entries      = entries
+              )
+
+            response: AppendResponse <-
+              rpc.appendEntries(node, request)
+          yield (response, matchIdx.increaseBy(entries.size))
+
+        response.flatMap:
+          case (AppendResponse.Accepted, newMatchIdx)   => F.pure(Right(newMatchIdx))
+          case (AppendResponse.NotConsistent, _)        => seek(matchIdx.previous, commitIdx, node)
+          case (AppendResponse.TermExpired(newTerm), _) => F.pure(Left(newTerm))
+          case (AppendResponse.IllegalState(state), _) => F.raiseError(IllegalStateException(state))
+
+      def forNode(node: NodeId): Stream[F, Any] =
+        localLog
+          .uncommitted(node, cfg.heartbeatEvery)
+          .evalMapAccumulate(Option.empty[Index]):
+            (matchIdx, nextIndex) =>
+              ???
+              // for
+              //   commitIdx <- localLog.commitIdx
+              //   either    <- send(matchIdx.getOrElse(nextIndex), commitIdx, node)
+              // yield ()
+
+            ???
+        // for
+        //   (prevLogTerm, prevLogIndex, entries) <- log.entriesFrom(index)
+        //   leaderCommit                         <- localLog.commitIdx
+        // yield ()
+
+      ???
 
     def handleAppends(localLog: LocalLog[F, A]): Stream[F, Nothing] =
       Stream

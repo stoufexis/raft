@@ -20,6 +20,8 @@ trait RPC[F[_], A]:
     request: AppendEntries[A]
   ): Stream[F, (NodeId, AppendResponse)]
 
+  def appendEntries(node: NodeId, request: AppendEntries[A]): F[AppendResponse]
+
   def incomingVotes: Stream[F, IncomingVote[F]]
 
   def incomingAppends: Stream[F, IncomingAppend[F, A]]
