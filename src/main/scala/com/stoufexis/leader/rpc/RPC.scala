@@ -9,7 +9,7 @@ import scala.concurrent.duration.FiniteDuration
 /** Should handle retries. Should make sure that received messages are from nodes within the
   * cluster, so only known NodeIds.
   */
-trait RPC[F[_]]:
+trait RPC[F[_], A]:
   def broadcastVotes(
     repeat:  FiniteDuration,
     request: RequestVote
@@ -17,9 +17,9 @@ trait RPC[F[_]]:
 
   def broadcastAppends(
     repeat:  FiniteDuration,
-    request: AppendEntries
+    request: AppendEntries[A]
   ): Stream[F, (NodeId, AppendResponse)]
 
   def incomingVotes: Stream[F, IncomingVote[F]]
 
-  def incomingAppends: Stream[F, IncomingAppend[F]]
+  def incomingAppends: Stream[F, IncomingAppend[F, A]]

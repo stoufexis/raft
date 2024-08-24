@@ -9,31 +9,25 @@ import org.typelevel.log4cats.Logger
 import com.stoufexis.leader.model.*
 import com.stoufexis.leader.rpc.*
 import com.stoufexis.leader.service.*
+import com.stoufexis.leader.typeclass.Increasing.*
 import com.stoufexis.leader.util.*
 
 import scala.concurrent.duration.FiniteDuration
 
-trait Raft[F[_]]:
-  def currentTerm: F[Term]
+trait Raft[F[_], A, S]:
+  // If current node is not the leader, return the leader id
+  def write(a: A): F[Either[NodeId, S]]
 
-  def currentState: F[Role]
-
-  def termStream: Stream[F, Term]
-
-  def stateStream: Stream[F, Role]
-
-  def discoverLeader: F[Discovery]
+  def read: F[Either[NodeId, S]]
 
 // TODO: general error handling
 object Raft:
-
-  def stateMachine[F[_]: Temporal: NamedLogger](
-    rpc:            RPC[F],
-    timeout:        Timeout[F],
-    initState:      NodeState,
-    staleAfter:     FiniteDuration,
-    heartbeatEvery: FiniteDuration,
-    voteEvery:      FiniteDuration
+  def apply[F[_]: Temporal: NamedLogger, A](
+    rpc:       RPC[F, A],
+    timeout:   Timeout[F],
+    log:       Log[F, A],
+    initState: NodeState,
+    config:    Config
   ): F[Nothing] =
     def loop(state: NodeState): F[Nothing] =
       (for
@@ -44,7 +38,8 @@ object Raft:
           timeout.nextElectionTimeout
 
         constStreams: List[Stream[F, NodeState]] = List(
-          handleAppends(state, electionTimeout, rpc.incomingAppends),
+          ???,
+          // handleAppends(state, electionTimeout, rpc.incomingAppends),
           handleVotes(state, rpc.incomingVotes)
         )
 
@@ -52,16 +47,18 @@ object Raft:
           case Role.Leader =>
             val broadcast: Stream[F, (NodeId, AppendResponse)] =
               rpc.broadcastAppends(
-                heartbeatEvery,
-                AppendEntries(state.currentNode, state.term)
+                config.heartbeatEvery,
+                ???
+                // AppendEntries(state.currentNode, state.term)
               )
 
-            List(sendAppends(state, broadcast, staleAfter))
+            // List(sendAppends(state, broadcast, config.staleAfter))
+            ???
 
           case Role.Candidate =>
             val broadcast: Stream[F, (NodeId, VoteResponse)] =
               rpc.broadcastVotes(
-                voteEvery,
+                config.voteEvery,
                 RequestVote(state.currentNode, state.term)
               )
 
@@ -77,67 +74,142 @@ object Raft:
       yield newState) >>= loop
 
     loop(initState)
-  end stateMachine
+  end apply
 
-  def handleAppends[F[_]](
-    state:           NodeState,
-    electionTimeout: FiniteDuration,
-    incoming:        Stream[F, IncomingAppend[F]]
-  )(using F: Temporal[F], log: Logger[F]): Stream[F, NodeState] =
-
-    def termExpired(req: AppendEntries, sink: DeferredSink[F, AppendResponse]): F[Unit] =
+  extension [F[_]](req: AppendEntries[?])(using F: MonadThrow[F], log: Logger[F])
+    def termExpired(state: NodeState, sink: DeferredSink[F, AppendResponse]): F[Unit] =
       for
         _ <- sink.complete_(AppendResponse.TermExpired(state.term))
         _ <- log.warn(s"Detected stale leader ${req.from}")
       yield ()
 
-    def accepted(req: AppendEntries, sink: DeferredSink[F, AppendResponse]): F[Unit] =
+    def duplicateLeaders[A](sink: DeferredSink[F, AppendResponse]): F[A] =
+      for
+        msg <- F.pure("Duplicate leaders for term")
+        _   <- sink.complete_(AppendResponse.IllegalState(msg))
+        n: Nothing <- F.raiseError(IllegalStateException(msg))
+      yield n
+
+    def accepted(sink: DeferredSink[F, AppendResponse]): F[Unit] =
       for
         _ <- sink.complete_(AppendResponse.Accepted)
         _ <- log.info(s"Append accepted from ${req.from}")
       yield ()
 
-    def duplicateLeaders(req: AppendEntries, sink: DeferredSink[F, AppendResponse]): F[Unit] =
+  extension [F[_]](req: RequestVote)(using F: MonadThrow[F], log: Logger[F])
+    def termExpired(state: NodeState, sink: DeferredSink[F, VoteResponse]): F[Unit] =
       for
-        state <- F.pure("Duplicate leaders for term")
-        _     <- sink.complete_(AppendResponse.IllegalState(state))
-        _     <- F.raiseError(IllegalStateException(state))
+        _ <- sink.complete_(VoteResponse.TermExpired(state.term))
+        _ <- log.warn(s"Detected stale candidate ${req.from}")
       yield ()
 
-    state.role match
-      case Role.Leader =>
-        incoming.evalMapFilter:
-          case IncomingAppend(request, sink) if state.isExpired(request.term) =>
-            termExpired(request, sink) as None
+    def reject(sink: DeferredSink[F, VoteResponse]): F[Unit] =
+      for
+        _ <- sink.complete_(VoteResponse.Rejected)
+        _ <- log.info(s"Rejected vote for ${req.from}. Its term was ${req.term}")
+      yield ()
 
-          case IncomingAppend(request, sink) if state.isCurrent(request.term) =>
-            duplicateLeaders(request, sink) as None
+    def grant(sink: DeferredSink[F, VoteResponse]): F[Unit] =
+      for
+        _ <- sink.complete_(VoteResponse.Granted)
+        _ <- log.info(s"Voted for ${req.from} in term ${req.term}")
+      yield ()
 
-          case IncomingAppend(request, sink) =>
-            accepted(request, sink) as Some(state.transition(Role.Follower, _ => request.term))
+  def leader[F[_]: Logger, A, S](
+    state:     NodeState,
+    log:       Log[F, A],
+    rpc:       RPC[F, A],
+    appends:   Stream[F, (A, DeferredSink[F, S])],
+    cfg:       Config,
+    automaton: (S, A) => F[S]
+  )(using F: Temporal[F]): Stream[F, NodeState] =
+    import com.stoufexis.leader.util.ResettableTimeout.*
 
-      case Role.Follower =>
-        incoming.resettableTimeout(
-          timeout   = electionTimeout,
-          onTimeout = F.pure(state.transition(Role.Candidate, _.next))
-        ):
-          case IncomingAppend(request, sink) if state.isExpired(request.term) =>
-            termExpired(request, sink) as ResettableTimeout.Skip()
+    val merged: Stream[F, IncomingVote[F] | IncomingAppend[F, A] | (A, DeferredSink[F, S])] =
+      rpc.incomingVotes merge rpc.incomingAppends merge appends
 
-          case IncomingAppend(request, sink) if state.isCurrent(request.term) =>
-            accepted(request, sink) as ResettableTimeout.Reset()
+    merged.resettableTimeoutAccumulate(
+      (),
+      cfg.staleAfter,
+      F.pure(state.transition(Role.Follower))
+    ):
+      case (st, IncomingAppend(req, sink)) if state.isExpired(req.term) =>
+        req.termExpired(state, sink) as ((), Skip())
 
-          case IncomingAppend(request, sink) =>
-            accepted(request, sink) as
-              ResettableTimeout.Output(state.transition(Role.Follower, _ => request.term))
+      case (st, IncomingVote(req, sink)) if state.isExpired(req.term) =>
+        req.termExpired(state, sink) as ((), Skip())
 
-      case Role.Candidate | Role.VotedFollower =>
-        incoming.evalMapFilter:
-          case IncomingAppend(request, sink) if state.isExpired(request.term) =>
-            termExpired(request, sink) as None
+      case (st, IncomingAppend(req, sink)) if state.isCurrent(req.term) =>
+        req.duplicateLeaders(sink)
 
-          case IncomingAppend(request, sink) =>
-            accepted(request, sink) as Some(state.transition(Role.Follower, _ => request.term))
+      case (st, IncomingVote(req, sink)) if state.isCurrent(req.term) =>
+        req.reject(sink) as ((), Skip())
+
+      // newer leader detected
+      case (st, IncomingAppend(req, sink)) =>
+        req.accepted(sink) as ((), Output(state.transition(Role.Follower, req.term)))
+
+      // new election detected
+      case (st, IncomingVote(req, sink)) =>
+        req.grant(sink) as ((), Output(state.transition(Role.VotedFollower, req.term)))
+
+      case (st, (newEntry, sink)) => ???
+
+  end leader
+
+  // def handleAppends[F[_], A](
+  //   state:           NodeState,
+  //   electionTimeout: FiniteDuration,
+  //   incoming:        Stream[F, IncomingAppend[F]]
+  // )(using F: Temporal[F], log: Logger[F]): Stream[F, NodeState] = ???
+
+  // def termExpired(req: AppendEntries[], sink: DeferredSink[F, AppendResponse]): F[Unit] =
+  //   for
+  //     _ <- sink.complete_(AppendResponse.TermExpired(state.term))
+  //     _ <- log.warn(s"Detected stale leader ${req.from}")
+  //   yield ()
+
+  // def duplicateLeaders(req: AppendEntries, sink: DeferredSink[F, AppendResponse]): F[Unit] =
+  //   for
+  //     state <- F.pure("Duplicate leaders for term")
+  //     _     <- sink.complete_(AppendResponse.IllegalState(state))
+  //     _     <- F.raiseError(IllegalStateException(state))
+  //   yield ()
+
+  // state.role match
+  //   case Role.Leader =>
+  //     incoming.evalMapFilter:
+  //       case IncomingAppend(request, sink) if state.isExpired(request.term) =>
+  //         termExpired(request, sink) as None
+
+  //       case IncomingAppend(request, sink) if state.isCurrent(request.term) =>
+  //         duplicateLeaders(request, sink) as None
+
+  //       case IncomingAppend(request, sink) =>
+  //         accepted(request, sink) as Some(state.transition(Role.Follower, _ => request.term))
+
+  //   case Role.Follower =>
+  //     incoming.resettableTimeout(
+  //       timeout   = electionTimeout,
+  //       onTimeout = F.pure(state.transition(Role.Candidate, _.next))
+  //     ):
+  //       case IncomingAppend(request, sink) if state.isExpired(request.term) =>
+  //         termExpired(request, sink) as ResettableTimeout.Skip()
+
+  //       case IncomingAppend(request, sink) if state.isCurrent(request.term) =>
+  //         accepted(request, sink) as ResettableTimeout.Reset()
+
+  //       case IncomingAppend(request, sink) =>
+  //         accepted(request, sink) as
+  //           ResettableTimeout.Output(state.transition(Role.Follower, _ => request.term))
+
+  //   case Role.Candidate | Role.VotedFollower =>
+  //     incoming.evalMapFilter:
+  //       case IncomingAppend(request, sink) if state.isExpired(request.term) =>
+  //         termExpired(request, sink) as None
+
+  //       case IncomingAppend(request, sink) =>
+  //         accepted(request, sink) as Some(state.transition(Role.Follower, _ => request.term))
 
   def handleVotes[F[_]](
     state:    NodeState,
@@ -200,51 +272,47 @@ object Raft:
           case IncomingVote(request, sink) =>
             reject(request, sink) as None
 
-  /** Repeatedly broadcasts appends requests to all other nodes. Calls majorityReached each time a
-    * majority of nodes has succesfully been reached. After reaching majority once, the count is
-    * reset and we attempt to reach majority again (we wait a bit before broadcasting again).
-    * Terminates with a new state of follower if staleAfter has been reached or it detects its term
-    * is expired.
-    */
-  def sendAppends[F[_]](
-    state:      NodeState,
-    broadcast:  Stream[F, (NodeId, AppendResponse)],
-    staleAfter: FiniteDuration
+  def sendAppends2[F[_]](
+    state:          NodeState,
+    broadcast:      Stream[F, (NodeId, AppendResponse)],
+    heartbeatEvery: FiniteDuration,
+    staleAfter:     FiniteDuration
   )(using F: Temporal[F], log: Logger[F]): Stream[F, NodeState] =
-    broadcast.resettableTimeoutAccumulate(
-      init      = Set(state.currentNode),
-      timeout   = staleAfter,
-      onTimeout = F.pure(state.transition(Role.Follower))
-    ):
-      case (externals, (external, AppendResponse.Accepted)) =>
-        val newExternals: Set[NodeId] =
-          externals + external
+    ???
+    // broadcast.resettableTimeoutAccumulate(
+    //   init      = Set(state.currentNode),
+    //   timeout   = staleAfter,
+    //   onTimeout = F.pure(state.transition(Role.Follower))
+    // ):
+    //   case (externals, (external, AppendResponse.Accepted)) =>
+    //     val newExternals: Set[NodeId] =
+    //       externals + external
 
-        val info: F[Unit] =
-          log.info("Heatbeats reached the cluster majority")
+    //     val info: F[Unit] =
+    //       log.info("Heatbeats reached the cluster majority")
 
-        if state.isExternalMajority(newExternals) then
-          info as (Set(state.currentNode), ResettableTimeout.Reset())
-        else
-          F.pure(newExternals, ResettableTimeout.Skip())
+    //     if state.isExternalMajority(newExternals) then
+    //       info as (Set(state.currentNode), ResettableTimeout.Reset())
+    //     else
+    //       F.pure(newExternals, ResettableTimeout.Skip())
 
-      case (externals, (external, AppendResponse.TermExpired(newTerm)))
-          if state.isNotNew(newTerm) =>
-        val warn: F[Unit] = log.warn:
-          s"Got TermExpired with expired term $newTerm from $external"
+    //   case (externals, (external, AppendResponse.TermExpired(newTerm)))
+    //       if state.isNotNew(newTerm) =>
+    //     val warn: F[Unit] = log.warn:
+    //       s"Got TermExpired with expired term $newTerm from $external"
 
-        warn as (externals, ResettableTimeout.Skip())
+    //     warn as (externals, ResettableTimeout.Skip())
 
-      case (externals, (external, AppendResponse.TermExpired(newTerm))) =>
-        val warn: F[Unit] = log.warn:
-          s"Current term expired, new term: $newTerm"
+    //   case (externals, (external, AppendResponse.TermExpired(newTerm))) =>
+    //     val warn: F[Unit] = log.warn:
+    //       s"Current term expired, new term: $newTerm"
 
-        warn as (externals, ResettableTimeout.Output(state.transition(Role.Follower, _ => newTerm)))
+    //     warn as (externals, ResettableTimeout.Output(state.transition(Role.Follower, _ => newTerm)))
 
-      case (_, (external, AppendResponse.IllegalState(state))) =>
-        F.raiseError(IllegalStateException(s"Node $external detected illegal state: $state"))
+    //   case (_, (external, AppendResponse.IllegalState(state))) =>
+    //     F.raiseError(IllegalStateException(s"Node $external detected illegal state: $state"))
 
-  end sendAppends
+  end sendAppends2
 
   def attemptElection[F[_]](
     state:           NodeState,

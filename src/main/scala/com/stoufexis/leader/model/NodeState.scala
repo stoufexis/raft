@@ -1,6 +1,6 @@
 package com.stoufexis.leader.model
 
-import scala.math.Ordered.orderingToOrdered
+import com.stoufexis.leader.typeclass.Increasing.*
 
 case class NodeState(role: Role, term: Term, currentNode: NodeId, otherNodes: Set[NodeId]):
   def print: String =
@@ -11,6 +11,9 @@ case class NodeState(role: Role, term: Term, currentNode: NodeId, otherNodes: Se
 
   def transition(newRole: Role, termf: Term => Term): NodeState =
     copy(role = newRole, term = termf(term))
+
+  def transition(newRole: Role, newTerm: Term): NodeState =
+    copy(role = newRole, term = newTerm)
 
   def isNew(otherTerm: Term): Boolean =
     otherTerm > term
