@@ -39,7 +39,8 @@ object Leader:
     def sendInfo(beginAt: Index): F[(Term, Chunk[A])] =
       ???
 
-    /** If there is no new index for repeatEvery duration, repeat the previous index
+    /** If there is no new index for repeatEvery duration, repeat the previous index. When starting up
+      * the latest index is sent imediatelly as heartbeat
       */
     def uncommitted[A](repeatEvery: FiniteDuration, f: Index => F[Option[A]]): Stream[F, A] =
       ???
@@ -55,8 +56,8 @@ object Leader:
     * Implementing the efficient algorithm is left as a future effort.
     *
     * This implementation of raft only updates the state machine in the leader node. Other nodes simply
-    * replicate the log. The state machine in their logs gets populated if they become the leader.
-    * TODO: I think this means I can get rid of the leaderCommit
+    * replicate the log. The state machine in their logs gets populated if they become the leader. TODO:
+    * I think this means I can get rid of the leaderCommit
     *
     * @param state
     * @param log
@@ -122,7 +123,7 @@ object Leader:
       * termination. In all other cases nothing is emitted.
       */
     def appender(st: CommitLog[F, A]): List[Stream[F, NodeInfo[S]]] =
-      def send(nextIdx: Index, node: NodeId): F[Option[NodeInfo[S]]] =
+      def send(newIdx: Index, node: NodeId): F[Option[NodeInfo[S]]] =
         def go(matchIdx: Index, node: NodeId, seek: Boolean): F[Either[NodeInfo[S], Index]] =
           st.sendInfo(matchIdx).flatMap: (matchIdxTerm, entries) =>
             val request: AppendEntries[A] =
@@ -147,7 +148,7 @@ object Leader:
             st.getMatchIndex(node)
 
           result: Either[NodeInfo[S], Index] <-
-            go(matchIdx.getOrElse(nextIdx - 1), node, seek = false)
+            go(matchIdx.getOrElse(newIdx), node, seek = false)
 
           out: Option[NodeInfo[S]] <- result match
             case Left(newState)     => F.pure(Some(newState))
