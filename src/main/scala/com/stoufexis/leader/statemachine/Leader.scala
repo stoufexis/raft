@@ -20,11 +20,12 @@ import scala.concurrent.duration.FiniteDuration
 
 object Leader:
   class CommitLog[F[_]: Monad, A](
-    log:         Log[F, A],
-    uncommitted: SignallingRef[F, Index],
-    matchIdxs:   SignallingRef[F, Map[NodeId, Index]]
+    log:       Log[F, A],
+    unmatched: SignallingRef[F, Index],
+    matchIdxs: SignallingRef[F, Map[NodeId, Index]]
   ):
-    /** Wait until a majority commits the entry
+    /** Wait until a majority commits the entry. An empty entries indicates a read request. This still
+      * advances the index by appending a special entry to the log
       */
     def appendAndWait(nodes: Set[NodeId], term: Term, entries: Chunk[A]): F[Unit] =
       ???
@@ -40,14 +41,30 @@ object Leader:
 
     /** If there is no new index for advertiseEvery duration, repeat the previous index
       */
-    def uncommitted[A](repeatEvery: FiniteDuration, f: Index => F[Option[A]]): Stream[F, A] =
+    def uncommitted[A](f: Index => F[Option[A]]): Stream[F, A] =
       ???
 
   object CommitLog:
     def apply[F[_]: Temporal, A](log: Log[F, A]): F[CommitLog[F, A]] =
       ???
 
-  def apply[F[_]: Logger, A, S](
+  /** Linearizability of reads is implemented quite inefficiently right now. A read is inserted as a
+    * special entry in the log, and the read returns to the client only after the special entry is marked
+    * as committed. Section "6.4 Processing read-only queries more efficiently" of the [Raft
+    * paper](https://github.com/ongardie/dissertation#readme) explains a more efficient implementation.
+    * Implementing the efficient algorithm is left as a future effort.
+    *
+    * @param state
+    * @param log
+    * @param rpc
+    * @param appendsQ
+    *   Request for appending to the state machine. An empty chunk indicates a read request.
+    * @param cfg
+    * @param automaton
+    * @param F
+    * @return
+    */
+  def apply[F[_]: Logger, A, S: Monoid](
     state:     NodeInfo[S],
     log:       Log[F, A],
     rpc:       RPC[F, A],
@@ -56,8 +73,12 @@ object Leader:
     automaton: (S, A) => S
   )(using F: Temporal[F]): Stream[F, NodeInfo[S]] =
 
-    val appends: Stream[F, (DeferredSink[F, S], Chunk[A])] =
-      Stream.fromQueueUnterminated(appendsQ)
+    val appends: Stream[F, (Option[DeferredSink[F, S]], Chunk[A])] =
+      Stream
+        .fromQueueUnterminated(appendsQ, 1)
+        .map((sink, chunk) => (Some(sink), chunk))
+        // Heartbeat if the required time has passed since the last time an append was made manually
+        .timeoutOnPullTo(cfg.heartbeatEvery, Stream((None, Chunk.empty)))
 
     val handleIncomingAppends: Stream[F, NodeInfo[S]] =
       rpc.incomingAppends.evalMapFilter:
@@ -135,31 +156,30 @@ object Leader:
       end send
 
       state.otherNodes.toList.map: node =>
-        st.uncommitted(cfg.heartbeatEvery, send(_, node))
+        st.uncommitted(send(_, node))
 
     end appender
 
-    // TODO Properly implement lenearizability
-    def handleAppends(st: CommitLog[F, A]): Stream[F, Nothing] =
-      appends.evalScan(state.automatonState):
-        case (acc, (sink, entries)) if entries.nonEmpty =>
+    def handleAppends(initState: S, st: CommitLog[F, A]): Stream[F, Nothing] =
+      appends.evalScan(initState):
+        case (acc, (sink, entries)) =>
           val newState: S =
             entries.foldLeft(acc)(automaton)
 
           for
             _ <- st.appendAndWait(state.otherNodes, state.term, entries)
-            _ <- sink.complete_(newState)
+            _ <- sink.fold(F.unit)(_.complete_(newState))
           yield newState
-
-        case (acc, (sink, _)) =>
-          sink.complete_(acc) as acc
       .drain
 
     for
+      init: S <-
+        log.readAll.fold(Monoid[S].empty)(automaton)
+
       clog: CommitLog[F, A] <-
         Stream.eval(CommitLog(log))
 
-      out: NodeInfo[S] <-
-        raceFirst(handleIncomingAppends :: handleIncomingVotes :: handleAppends(clog) :: appender(clog))
+      out: NodeInfo[S] <- raceFirst:
+        handleIncomingAppends :: handleIncomingVotes :: handleAppends(init, clog) :: appender(clog)
     yield out
   end apply

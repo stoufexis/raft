@@ -7,7 +7,6 @@ case class NodeInfo[S](
   term:           Term,
   currentNode:    NodeId,
   otherNodes:     Set[NodeId],
-  automatonState: S,
 ):
   def print: String =
     s"${role.toString}(term = ${term.toInt})"

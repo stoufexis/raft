@@ -11,6 +11,8 @@ trait Log[F[_], A]:
 
   def term(index: Index): F[Term]
 
+  def readAll: Stream[F, A]
+
 trait LocalLog[F[_], A]:
   def commit(node: NodeId, idx: Index): F[Unit]
 
