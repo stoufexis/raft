@@ -9,6 +9,5 @@ case class AppendEntries[A](
   term:         Term,
   prevLogIndex: Index,
   prevLogTerm:  Term,
-  leaderCommit: Index,
   entries:      Chunk[A]
 )

@@ -36,12 +36,12 @@ object Leader:
     def setMatchIndex(node: NodeId, idx: Index): F[Unit] =
       ???
 
-    def sendInfo(beginAt: Index): F[(Term, Index, Chunk[A])] =
+    def sendInfo(beginAt: Index): F[(Term, Chunk[A])] =
       ???
 
-    /** If there is no new index for advertiseEvery duration, repeat the previous index
+    /** If there is no new index for repeatEvery duration, repeat the previous index
       */
-    def uncommitted[A](f: Index => F[Option[A]]): Stream[F, A] =
+    def uncommitted[A](repeatEvery: FiniteDuration, f: Index => F[Option[A]]): Stream[F, A] =
       ???
 
   object CommitLog:
@@ -53,6 +53,10 @@ object Leader:
     * as committed. Section "6.4 Processing read-only queries more efficiently" of the [Raft
     * paper](https://github.com/ongardie/dissertation#readme) explains a more efficient implementation.
     * Implementing the efficient algorithm is left as a future effort.
+    *
+    * This implementation of raft only updates the state machine in the leader node. Other nodes simply
+    * replicate the log. The state machine in their logs gets populated if they become the leader.
+    * TODO: I think this means I can get rid of the leaderCommit
     *
     * @param state
     * @param log
@@ -73,12 +77,10 @@ object Leader:
     automaton: (S, A) => S
   )(using F: Temporal[F]): Stream[F, NodeInfo[S]] =
 
-    val appends: Stream[F, (Option[DeferredSink[F, S]], Chunk[A])] =
+    val appends: Stream[F, (DeferredSink[F, S], Chunk[A])] =
       Stream
         .fromQueueUnterminated(appendsQ, 1)
-        .map((sink, chunk) => (Some(sink), chunk))
-        // Heartbeat if the required time has passed since the last time an append was made manually
-        .timeoutOnPullTo(cfg.heartbeatEvery, Stream((None, Chunk.empty)))
+        .map((sink, chunk) => (sink, chunk))
 
     val handleIncomingAppends: Stream[F, NodeInfo[S]] =
       rpc.incomingAppends.evalMapFilter:
@@ -122,14 +124,13 @@ object Leader:
     def appender(st: CommitLog[F, A]): List[Stream[F, NodeInfo[S]]] =
       def send(nextIdx: Index, node: NodeId): F[Option[NodeInfo[S]]] =
         def go(matchIdx: Index, node: NodeId, seek: Boolean): F[Either[NodeInfo[S], Index]] =
-          st.sendInfo(matchIdx).flatMap: (matchIdxTerm, commitIdx, entries) =>
+          st.sendInfo(matchIdx).flatMap: (matchIdxTerm, entries) =>
             val request: AppendEntries[A] =
               AppendEntries(
                 leaderId     = state.currentNode,
                 term         = state.term,
                 prevLogIndex = matchIdx,
                 prevLogTerm  = matchIdxTerm,
-                leaderCommit = commitIdx,
                 entries      = if seek then Chunk.empty else entries
               )
 
@@ -146,7 +147,7 @@ object Leader:
             st.getMatchIndex(node)
 
           result: Either[NodeInfo[S], Index] <-
-            go(matchIdx.getOrElse(nextIdx), node, seek = false)
+            go(matchIdx.getOrElse(nextIdx - 1), node, seek = false)
 
           out: Option[NodeInfo[S]] <- result match
             case Left(newState)     => F.pure(Some(newState))
@@ -156,7 +157,7 @@ object Leader:
       end send
 
       state.otherNodes.toList.map: node =>
-        st.uncommitted(send(_, node))
+        st.uncommitted(cfg.heartbeatEvery, send(_, node))
 
     end appender
 
@@ -168,7 +169,7 @@ object Leader:
 
           for
             _ <- st.appendAndWait(state.otherNodes, state.term, entries)
-            _ <- sink.fold(F.unit)(_.complete_(newState))
+            _ <- sink.complete_(newState)
           yield newState
       .drain
 
