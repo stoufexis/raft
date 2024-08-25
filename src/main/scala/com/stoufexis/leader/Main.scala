@@ -3,15 +3,18 @@ package com.stoufexis.leader
 import cats.effect.*
 import cats.effect.std.Mutex
 import cats.implicits.given
-import com.stoufexis.leader.proto.protos.*
+import fs2.*
 import fs2.grpc.syntax.all.*
 import io.grpc.ManagedChannel
 import io.grpc.Metadata
 import io.grpc.ServerServiceDefinition
 import io.grpc.netty.shaded.io.grpc.netty.*
 
+import com.stoufexis.leader.proto.protos.*
+
 import scala.annotation.unused
 import scala.concurrent.duration.*
+import com.stoufexis.leader.util.raceFirstOrError
 
 /*
   TODOS For leader
@@ -110,27 +113,16 @@ import scala.concurrent.duration.*
 //   def run: IO[Unit] = client
 
 object Main extends IOApp.Simple:
-  def sleepS(i: Int) = IO.println(i + " Sleeping") >> IO.sleep(1.seconds)
-  def sleepL(i: Int) = IO.println(i + " Sleeping") >> IO.sleep(10.seconds)
+  val streams =
+    List(
+      Stream.awakeDelay[IO](1.second).evalTap(d => IO.println(d)),
+      Stream.awakeDelay[IO](1.second).evalTap(d => IO.println(d)),
+      Stream.awakeDelay[IO](1.second).evalTap(d => IO.println(d))
+    )
 
-  def program1(mutex: Mutex[IO]) =
+  def run =
     for
-      fu <- mutex.lock.surround(sleepS(1) as sleepL(1))
-      _  <- fu
+      f <- raceFirstOrError(streams).flatMap(d => IO.println("Done "+d)).start
+      _ <- IO.readLine
+      _ <- f.cancel
     yield ()
-
-  def program2(mutex: Mutex[IO]) =
-    for
-      _ <- mutex.lock.surround(sleepL(2))
-    yield ()
-
-  def run: IO[Unit] =
-    IO.race(
-      IO.readLine,
-      for
-        m <- Mutex[IO]
-        _ <- program1(m).start
-        _ <- program2(m).start
-        _ <- IO.never
-      yield ()
-    ).void

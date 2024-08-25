@@ -66,11 +66,17 @@ extension [F[_], A](stream: Stream[F, A])
     resettableTimeoutAccumulate((), timeout, onTimeout): (_, a) =>
       f(a).map(((), _))
 
-def raceFirstOrError[F[_]: Concurrent, A](streams: List[Stream[F, A]]): F[A] =
+  def evalMapFilterAccumulate[S, B](init: S)(f: (S, A) => F[(S, Option[B])]): Stream[F, B] =
+    stream.evalMapAccumulate(init)(f).mapFilter(_._2)
+
+def raceFirst[F[_]: Concurrent, A](streams: Iterable[Stream[F, A]]): Stream[F, A] =
   Stream
-    .iterable(streams.map(_.take(1)))
+    .iterable(streams.map(_.head))
     .parJoinUnbounded
     .take(1)
+
+def raceFirstOrError[F[_]: Concurrent, A](streams: Iterable[Stream[F, A]]): F[A] =
+  raceFirst(streams)
     .compile
     .lastOrError
 

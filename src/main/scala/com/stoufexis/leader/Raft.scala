@@ -153,13 +153,12 @@ object Raft:
         case IncomingVote(req, sink) =>
           req.grant(sink) as Some(state.transition(Role.VotedFollower, req.term))
 
-    // TODO heartbeats
-    def appender(localLog: LocalLog[F, A]) =
-      def seek(matchIdx: Index, commitIdx: Index, node: NodeId): F[Either[Term, Index]] =
+    def appender(localLog: LocalLog[F, A]): List[Stream[F, NodeInfo[S]]] =
+      def seek(matchIdx: Index, node: NodeId): F[Either[NodeInfo[S], Index]] =
         val response: F[AppendResponse] =
           for
-            prevLogTerm: Term <-
-              log.term(matchIdx)
+            prevLogTerm: Term  <- log.term(matchIdx)
+            commitIdx:   Index <- localLog.commitIdx
 
             request: AppendEntries[A] =
               AppendEntries(
@@ -176,17 +175,21 @@ object Raft:
           yield response
 
         response.flatMap:
-          case AppendResponse.Accepted             => send(matchIdx, commitIdx, node)
-          case AppendResponse.NotConsistent        => seek(matchIdx.previous, commitIdx, node)
-          case AppendResponse.TermExpired(newTerm) => F.pure(Left(newTerm))
-          case AppendResponse.IllegalState(state)  => F.raiseError(IllegalStateException(state))
+          case AppendResponse.Accepted =>
+            send(matchIdx, node)
+          case AppendResponse.NotConsistent =>
+            seek(matchIdx.previous, node)
+          case AppendResponse.TermExpired(newTerm) =>
+            F.pure(Left(state.transition(Role.Follower, newTerm)))
+          case AppendResponse.IllegalState(state) =>
+            F.raiseError(IllegalStateException(state))
       end seek
 
-      def send(matchIdx: Index, commitIdx: Index, node: NodeId): F[Either[Term, Index]] =
+      def send(matchIdx: Index, node: NodeId): F[Either[NodeInfo[S], Index]] =
         val response: F[(AppendResponse, Index)] =
           for
-            (prevLogTerm, entries) <-
-              log.entriesAfter(matchIdx)
+            (prevLogTerm, entries) <- log.entriesAfter(matchIdx)
+            commitIdx: Index <- localLog.commitIdx
 
             request: AppendEntries[A] =
               AppendEntries(
@@ -203,29 +206,34 @@ object Raft:
           yield (response, matchIdx.increaseBy(entries.size))
 
         response.flatMap:
-          case (AppendResponse.Accepted, newMatchIdx)   => F.pure(Right(newMatchIdx))
-          case (AppendResponse.NotConsistent, _)        => seek(matchIdx.previous, commitIdx, node)
-          case (AppendResponse.TermExpired(newTerm), _) => F.pure(Left(newTerm))
-          case (AppendResponse.IllegalState(state), _) => F.raiseError(IllegalStateException(state))
+          case (AppendResponse.Accepted, newMatchIdx) =>
+            F.pure(Right(newMatchIdx))
+          case (AppendResponse.NotConsistent, _) =>
+            seek(matchIdx.previous, node)
+          case (AppendResponse.TermExpired(newTerm), _) =>
+            F.pure(Left(state.transition(Role.Follower, newTerm)))
+          case (AppendResponse.IllegalState(state), _) =>
+            F.raiseError(IllegalStateException(state))
 
-      def forNode(node: NodeId): Stream[F, Any] =
+      def forNode(node: NodeId): Stream[F, NodeInfo[S]] =
         localLog
           .uncommitted(node, cfg.heartbeatEvery)
-          .evalMapAccumulate(Option.empty[Index]):
-            (matchIdx, nextIndex) =>
-              ???
-              // for
-              //   commitIdx <- localLog.commitIdx
-              //   either    <- send(matchIdx.getOrElse(nextIndex), commitIdx, node)
-              // yield ()
-
-            ???
-        // for
-        //   (prevLogTerm, prevLogIndex, entries) <- log.entriesFrom(index)
-        //   leaderCommit                         <- localLog.commitIdx
-        // yield ()
-
-      ???
+          .evalMapFilterAccumulate(Option.empty[Index]):
+            case (Some(matchIdx), nextIndex) if matchIdx == nextIndex =>
+              for
+                a: Either[NodeInfo[S], Index] <- seek(matchIdx, node)
+                s: Index               = a.toOption.getOrElse(matchIdx)
+                o: Option[NodeInfo[S]] = a.left.toOption
+              yield (Some(s), o)
+            case (matchIdx, nextIndex) =>
+              for
+                a: Either[NodeInfo[S], Index] <- send(matchIdx.getOrElse(nextIndex), node)
+                s: Option[Index]       = a.toOption <+> matchIdx
+                o: Option[NodeInfo[S]] = a.left.toOption
+              yield (s, o)
+        
+      state.otherNodes.map(forNode).toList
+    end appender
 
     def handleAppends(localLog: LocalLog[F, A]): Stream[F, Nothing] =
       Stream
