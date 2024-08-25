@@ -1,11 +1,11 @@
-package com.stoufexis.leader
+package com.stoufexis.leader.statemachine
 
 import com.stoufexis.leader.model.*
 import fs2.*
 import scala.concurrent.duration.FiniteDuration
 
 trait Log[F[_], A]:
-  def entry(term: Term, entry: A): F[Index]
+  def append(term: Term, entry: A): F[Index]
 
   def entriesAfter(index: Index): F[(Term, Chunk[A])]
 

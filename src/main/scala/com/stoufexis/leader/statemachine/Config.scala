@@ -1,4 +1,4 @@
-package com.stoufexis.leader
+package com.stoufexis.leader.statemachine
 
 import scala.concurrent.duration.FiniteDuration
 
