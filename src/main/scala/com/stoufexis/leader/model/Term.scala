@@ -1,9 +1,9 @@
 package com.stoufexis.leader.model
 
-import com.stoufexis.leader.typeclass.Counter
+import com.stoufexis.leader.typeclass.IntLike
 
 opaque type Term = Int
 
 object Term:
-  given Counter[Term]     = Counter.IncreasingInt
+  given IntLike[Term]        = IntLike.IntLikeInt
   given CanEqual[Term, Term] = CanEqual.derived

@@ -1,6 +1,6 @@
 package com.stoufexis.leader.model
 
-import com.stoufexis.leader.typeclass.Counter.*
+import com.stoufexis.leader.typeclass.IntLike.*
 
 case class NodeInfo[S](
   role:           Role,
@@ -21,6 +21,12 @@ case class NodeInfo[S](
   def transition(newRole: Role, newTerm: Term): NodeInfo[S] =
     copy(role = newRole, term = newTerm)
 
+  def transition(newRole: Role): NodeInfo[S] =
+    copy(role = newRole)
+
+  def toFollower(newTerm: Term): NodeInfo[S] =
+    transition(Role.Follower, newTerm)
+
   def isNew(otherTerm: Term): Boolean =
     otherTerm > term
 
@@ -32,6 +38,3 @@ case class NodeInfo[S](
 
   def isCurrent(otherTerm: Term): Boolean =
     otherTerm == term
-
-  def transition(newRole: Role): NodeInfo[S] =
-    copy(role = newRole)

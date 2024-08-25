@@ -13,14 +13,12 @@ import org.typelevel.log4cats.Logger
 import com.stoufexis.leader.model.*
 import com.stoufexis.leader.rpc.*
 import com.stoufexis.leader.service.*
-import com.stoufexis.leader.typeclass.Counter.*
+import com.stoufexis.leader.typeclass.IntLike.*
 import com.stoufexis.leader.util.*
 
 import scala.concurrent.duration.FiniteDuration
 
 object Leader:
-  case class CommittableIndex[F[_]](index: Index, commit: F[Unit])
-
   class CommitLog[F[_]: Monad, A](
     log:         Log[F, A],
     uncommitted: SignallingRef[F, Index],
@@ -28,7 +26,7 @@ object Leader:
   ):
     /** Wait until a majority commits the entry
       */
-    def appendAndWait(nodes: Set[NodeId], term: Term, entry: A): F[Unit] =
+    def appendAndWait(nodes: Set[NodeId], term: Term, entries: Chunk[A]): F[Unit] =
       ???
 
     def getMatchIndex(node: NodeId): F[Option[Index]] =
@@ -37,22 +35,29 @@ object Leader:
     def setMatchIndex(node: NodeId, idx: Index): F[Unit] =
       ???
 
-    def sendInfo(beginAt: Index): F[(Term, Index, Chunk[A])] = ???
+    def sendInfo(beginAt: Index): F[(Term, Index, Chunk[A])] =
+      ???
 
     /** If there is no new index for advertiseEvery duration, repeat the previous index
       */
-    def uncommitted(node: NodeId, advertiseEvery: FiniteDuration): Stream[F, Index] =
+    def uncommitted[A](repeatEvery: FiniteDuration, f: Index => F[Option[A]]): Stream[F, A] =
+      ???
+
+  object CommitLog:
+    def apply[F[_]: Temporal, A](log: Log[F, A]): F[CommitLog[F, A]] =
       ???
 
   def apply[F[_]: Logger, A, S](
     state:     NodeInfo[S],
     log:       Log[F, A],
     rpc:       RPC[F, A],
-    appends:   QueueSource[F, (A, DeferredSink[F, S])],
+    appendsQ:  QueueSource[F, (DeferredSink[F, S], Chunk[A])],
     cfg:       Config,
-    automaton: (S, A) => F[S]
+    automaton: (S, A) => S
   )(using F: Temporal[F]): Stream[F, NodeInfo[S]] =
-    import com.stoufexis.leader.util.ResettableTimeout.*
+
+    val appends: Stream[F, (DeferredSink[F, S], Chunk[A])] =
+      Stream.fromQueueUnterminated(appendsQ)
 
     val handleIncomingAppends: Stream[F, NodeInfo[S]] =
       rpc.incomingAppends.evalMapFilter:
@@ -78,88 +83,83 @@ object Leader:
         case IncomingVote(req, sink) =>
           req.grant(sink) as Some(state.transition(Role.VotedFollower, req.term))
 
-    def appender(localLog: CommitLog[F, A]): List[Stream[F, NodeInfo[S]]] =
-      def send(matchIdx: Index, node: NodeId, seek: Boolean = false): F[Either[NodeInfo[S], Index]] =
-        val response: F[(AppendResponse, Index)] =
-          for
-            (matchIdxTerm, commitIdx, as) <-
-              localLog.sendInfo(matchIdx)
-
-            entries: Chunk[A] = 
-              if seek then Chunk.empty else as
-
-            request: AppendEntries[A] =
+    /** Maintains a matchIndex for each node, which points to the last index in the log for which every
+      * preceeding entry matches, including the matchIndex entry.
+      *
+      * If there is a new uncommitted index, it attempts to send the uncommitted records to the node. If
+      * the node returns a NotConsistent, then attempt to find the largest index for which the logs
+      * match, by decreasing the matchIndex by 1 and attempting to send an empty AppendEntries.
+      *
+      * If there is no new uncommitted index and heartbeatEvery time has passed, will emit heartbeat,
+      * which is a seek request, ie an append entries with no entries. The heartbeat may also fail the
+      * consistency check, in which case a seek is attempted to find the correct matchIndex, and then a
+      * send is attempted.
+      *
+      * If we encounter a TermExpired, emit a new state, which signals the upstream for this stream's
+      * termination. In all other cases nothing is emitted.
+      */
+    def appender(st: CommitLog[F, A]): List[Stream[F, NodeInfo[S]]] =
+      def send(nextIdx: Index, node: NodeId): F[Option[NodeInfo[S]]] =
+        def go(matchIdx: Index, node: NodeId, seek: Boolean): F[Either[NodeInfo[S], Index]] =
+          st.sendInfo(matchIdx).flatMap: (matchIdxTerm, commitIdx, entries) =>
+            val request: AppendEntries[A] =
               AppendEntries(
                 leaderId     = state.currentNode,
                 term         = state.term,
                 prevLogIndex = matchIdx,
                 prevLogTerm  = matchIdxTerm,
                 leaderCommit = commitIdx,
-                entries      = entries
+                entries      = if seek then Chunk.empty else entries
               )
 
-            response: AppendResponse <-
-              rpc.appendEntries(node, request)
-          yield (response, matchIdx.increaseBy(entries.size))
+            rpc.appendEntries(node, request).flatMap:
+              case AppendResponse.Accepted if seek     => go(matchIdx, node, seek = false)
+              case AppendResponse.Accepted             => F.pure(Right(matchIdx + entries.size))
+              case AppendResponse.NotConsistent        => go(matchIdx - 1, node, seek = true)
+              case AppendResponse.TermExpired(newTerm) => F.pure(Left(state.toFollower(newTerm)))
+              case AppendResponse.IllegalState(state)  => IllegalStateException(state).raiseError
+        end go
 
-        response.flatMap:
-          case (AppendResponse.Accepted, newMatchIdx) if seek =>
-            send(matchIdx, node, seek = false)
-          case (AppendResponse.Accepted, newMatchIdx) =>
-            F.pure(Right(newMatchIdx))
-          case (AppendResponse.NotConsistent, _) =>
-            send(matchIdx.previous, node, seek = true)
-          case (AppendResponse.TermExpired(newTerm), _) =>
-            F.pure(Left(state.transition(Role.Follower, newTerm)))
-          case (AppendResponse.IllegalState(state), _) =>
-            F.raiseError(IllegalStateException(state))
+        for
+          matchIdx: Option[Index] <-
+            st.getMatchIndex(node)
 
-      /** Maintains a matchIndex for each node, which points to the last index in the log for which every
-        * preceeding entry matches, including the matchIndex entry.
-        *
-        * If there is a new uncommitted index, it attempts to send the uncommitted records to the node.
-        * If the node returns a NotConsistent, then attempt to find the largest index for which the logs
-        * match, by decreasing the matchIndex by 1 and attempting to send an empty AppendEntries.
-        *
-        * If there is no new uncommitted index and heartbeatEvery time has passed, will emit heartbeat,
-        * which is a seek request, ie an append entries with no entries. The heartbeat may also fail the
-        * consistency check, in which case a seek is attempted to find the correct matchIndex, and then a
-        * send is attempted.
-        *
-        * If we encounter a TermExpired, emit a new state, which signals the upstream for this stream's
-        * termination. In all other cases nothing is emitted.
-        */
-      def forNode(node: NodeId): Stream[F, NodeInfo[S]] =
-        localLog
-          .uncommitted(node, cfg.heartbeatEvery)
-          .evalMapFilter: nextIdx =>
-            for
-              matchIdx: Option[Index] <-
-                localLog.getMatchIndex(node)
+          result: Either[NodeInfo[S], Index] <-
+            go(matchIdx.getOrElse(nextIdx), node, seek = false)
 
-              result: Either[NodeInfo[S], Index] <-
-                send(matchIdx.getOrElse(nextIdx), node)
+          out: Option[NodeInfo[S]] <- result match
+            case Left(newState)     => F.pure(Some(newState))
+            case Right(newMatchIdx) => st.setMatchIndex(node, newMatchIdx) as None
+        yield out
 
-              out: Option[NodeInfo[S]] <- result match
-                case Left(newState)     => F.pure(Some(newState))
-                case Right(newMatchIdx) => localLog.setMatchIndex(node, newMatchIdx) as None
-            yield out
+      end send
 
-      state.otherNodes.map(forNode).toList
+      state.otherNodes.toList.map: node =>
+        st.uncommitted(cfg.heartbeatEvery, send(_, node))
+
     end appender
 
-    def handleAppends(localLog: CommitLog[F, A]): Stream[F, Nothing] =
-      Stream
-        .fromQueueUnterminated(appends)
-        .evalScan(state.automatonState):
-          case (acc, (newEntry, sink)) =>
-            for
-              // _    <- localLog.appendAndWait(state.term, newEntry)
-              newS <- automaton(acc, newEntry)
-              _    <- sink.complete_(newS)
-            yield newS
-        .drain
+    // TODO Properly implement lenearizability
+    def handleAppends(st: CommitLog[F, A]): Stream[F, Nothing] =
+      appends.evalScan(state.automatonState):
+        case (acc, (sink, entries)) if entries.nonEmpty =>
+          val newState: S =
+            entries.foldLeft(acc)(automaton)
 
-    // handleIncomingAppends merge handleIncomingVotes merge handleAppends
-    ???
+          for
+            _ <- st.appendAndWait(state.otherNodes, state.term, entries)
+            _ <- sink.complete_(newState)
+          yield newState
+
+        case (acc, (sink, _)) =>
+          sink.complete_(acc) as acc
+      .drain
+
+    for
+      clog: CommitLog[F, A] <-
+        Stream.eval(CommitLog(log))
+
+      out: NodeInfo[S] <-
+        raceFirst(handleIncomingAppends :: handleIncomingVotes :: handleAppends(clog) :: appender(clog))
+    yield out
   end apply
