@@ -19,20 +19,23 @@ import com.stoufexis.leader.util.*
 import scala.concurrent.duration.FiniteDuration
 
 object Leader:
-  class LocalLog[F[_], A](log: Log[F, A]):
+  case class CommittableIndex[F[_]](index: Index, commit: F[Unit])
+
+  class LocalLog[F[_]: Monad, A](
+    log:              Log[F, A],
+    uncommittedQueue: Queue[F, (Index, Map[NodeId, Deferred[F, Unit]])]
+  ):
     /** Wait until a majority commits the entry
       */
-    def appendAndWait(term: Term, entry: A): F[Unit] = ???
+    def appendAndWait(nodes: Set[NodeId], term: Term, entry: A): F[Unit] =
+      ???
 
-    def sendInfo(index: Index): F[(Term, Index, Chunk[A])] = ???
-
-    def commit(node: NodeId, idx: Index): F[Unit] = ???
+    def sendInfo(beginAt: Index, endAt: Index): F[(Term, Index, Chunk[A])] = ???
 
     /** If there is no new index for advertiseEvery duration, repeat the previous index
       */
-    def uncommitted(node: NodeId, advertiseEvery: FiniteDuration): Stream[F, Index] = ???
-
-    def majorityCommit(idx: Index): F[Unit] = ???
+    def uncommitted(node: NodeId, advertiseEvery: FiniteDuration): Stream[F, CommittableIndex[F]] =
+      ???
 
   def apply[F[_]: Logger, A, S](
     state:     NodeInfo[S],
@@ -70,14 +73,15 @@ object Leader:
 
     def appender(localLog: LocalLog[F, A]): List[Stream[F, NodeInfo[S]]] =
       def send(
-        matchIdx: Index,
-        node:     NodeId,
-        seek:     Boolean = false
+        matchIdx:    Index,
+        node:        NodeId,
+        committable: CommittableIndex[F],
+        seek:        Boolean = false
       ): F[Either[NodeInfo[S], Index]] =
         val response: F[(AppendResponse, Index)] =
           for
             (matchIdxTerm, commitIdx, entries) <-
-              localLog.sendInfo(matchIdx)
+              localLog.sendInfo(matchIdx, committable.index)
 
             request: AppendEntries[A] =
               AppendEntries(
@@ -95,11 +99,11 @@ object Leader:
 
         response.flatMap:
           case (AppendResponse.Accepted, newMatchIdx) if seek =>
-            send(matchIdx, node, seek = false)
+            send(matchIdx, node, committable, seek = false)
           case (AppendResponse.Accepted, newMatchIdx) =>
-            localLog.commit(node, newMatchIdx) as (Right(newMatchIdx))
+            committable.commit as (Right(newMatchIdx))
           case (AppendResponse.NotConsistent, _) =>
-            send(matchIdx.previous, node, seek = true)
+            send(matchIdx.previous, node, committable, seek = true)
           case (AppendResponse.TermExpired(newTerm), _) =>
             F.pure(Left(state.transition(Role.Follower, newTerm)))
           case (AppendResponse.IllegalState(state), _) =>
