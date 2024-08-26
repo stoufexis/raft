@@ -136,9 +136,13 @@ object Leader:
       type SendErr =
         AppendResponse.TermExpired | AppendResponse.IllegalState
 
-      def send(newIdx: Index, node: NodeId): F[Option[SendErr]] =
-        def go(matchIdx: Index, node: NodeId, seek: Boolean): F[Either[SendErr, Index]] =
-          val info: F[(Term, Chunk[A])] =
+      def send(newIdx: Index, node: NodeId): Stream[F, Option[SendErr]] =
+        def go(
+          matchIdx: Index,
+          node:     NodeId,
+          seek:     Boolean
+        ): Pull[F, Option[Either[SendErr, Index]], Unit] =
+          val info: Pull[F, Nothing, (Term, Chunk[A])] = Pull.eval:
             if seek then
               cl.seekInfo(matchIdx).map((_, Chunk.empty))
             else
@@ -154,31 +158,35 @@ object Leader:
                 entries      = entries
               )
 
-            rpc.appendEntries(node, request).flatMap:
-              case AppendResponse.Accepted if seek    => go(matchIdx, node, seek = false)
-              case AppendResponse.Accepted            => F.pure(Right(matchIdx + entries.size))
+            Pull.eval(rpc.appendEntries(node, request)).flatMap:
+              case AppendResponse.Accepted if seek =>
+                Pull.output1(None) >> go(matchIdx, node, seek = false)
+              case AppendResponse.Accepted =>
+                Pull.output1(Some(Right(matchIdx + entries.size))) >> Pull.done
               case AppendResponse.NotConsistent       => go(matchIdx - 1, node, seek = true)
-              case r @ AppendResponse.TermExpired(_)  => F.pure(Left(r))
-              case r @ AppendResponse.IllegalState(_) => F.pure(Left(r))
+              case r @ AppendResponse.TermExpired(_)  => Pull.output1(Some(Left(r))) >> Pull.done
+              case r @ AppendResponse.IllegalState(_) => Pull.output1(Some(Left(r))) >> Pull.done
         end go
 
         for
           matchIdx: Option[Index] <-
-            cl.getMatchIndex(node)
+            Stream.eval(cl.getMatchIndex(node))
 
-          result: Either[SendErr, Index] <-
-            go(matchIdx.getOrElse(newIdx), node, seek = false)
+          result: Option[Either[SendErr, Index]] <-
+            go(matchIdx.getOrElse(newIdx), node, seek = false).stream
 
-          out: Option[SendErr] <- result match
-            case Left(err)  => F.pure(Some(err))
-            case Right(idx) => cl.setMatchIndex(node, idx) as None
+          out: Option[SendErr] <- Stream.eval:
+            result match
+              case None             => F.pure(None)
+              case Some(Left(err))  => F.pure(Some(err))
+              case Some(Right(idx)) => cl.setMatchIndex(node, idx) as None
         yield out
 
       end send
 
       def node(id: NodeId): Stream[F, (NodeId, Option[SendErr])] =
         cl.uncommitted(cfg.heartbeatEvery)
-          .evalMap(send(_, id))
+          .flatMap(send(_, id))
           .map((id, _))
 
       val outputs: Stream[F, (NodeId, Option[SendErr])] =
