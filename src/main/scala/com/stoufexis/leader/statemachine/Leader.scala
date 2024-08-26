@@ -39,6 +39,10 @@ object Leader:
     def sendInfo(beginAt: Index): F[(Term, Chunk[A])] =
       ???
 
+    def seekInfo(beginAt: Index): F[Term] =
+      ???
+
+
     /** If there is no new index for repeatEvery duration, repeat the previous index. When starting up
       * the latest index is sent imediatelly as heartbeat
       */
@@ -57,7 +61,7 @@ object Leader:
     *
     * This implementation of raft only updates the state machine in the leader node. Other nodes simply
     * replicate the log. The state machine in their logs gets populated if they become the leader. TODO:
-    * I think this means I can get rid of the leaderCommit
+    * I think this means I can get rid of the leaderCommit in AppendEntries requests
     *
     * @param state
     * @param log
@@ -79,9 +83,7 @@ object Leader:
   )(using F: Temporal[F]): Stream[F, NodeInfo[S]] =
 
     val appends: Stream[F, (DeferredSink[F, S], Chunk[A])] =
-      Stream
-        .fromQueueUnterminated(appendsQ, 1)
-        .map((sink, chunk) => (sink, chunk))
+      Stream.fromQueueUnterminated(appendsQ, 1)
 
     val handleIncomingAppends: Stream[F, NodeInfo[S]] =
       rpc.incomingAppends.evalMapFilter:
@@ -122,17 +124,23 @@ object Leader:
       * If we encounter a TermExpired, emit a new state, which signals the upstream for this stream's
       * termination. In all other cases nothing is emitted.
       */
-    def appender(st: CommitLog[F, A]): List[Stream[F, NodeInfo[S]]] =
+    def appender(cl: CommitLog[F, A]): List[Stream[F, NodeInfo[S]]] =
       def send(newIdx: Index, node: NodeId): F[Option[NodeInfo[S]]] =
         def go(matchIdx: Index, node: NodeId, seek: Boolean): F[Either[NodeInfo[S], Index]] =
-          st.sendInfo(matchIdx).flatMap: (matchIdxTerm, entries) =>
+          val info: F[(Term, Chunk[A])] =
+            if seek then
+              cl.seekInfo(matchIdx).map((_, Chunk.empty))
+            else
+              cl.sendInfo(matchIdx)
+
+          info.flatMap: (matchIdxTerm, entries) =>
             val request: AppendEntries[A] =
               AppendEntries(
                 leaderId     = state.currentNode,
                 term         = state.term,
                 prevLogIndex = matchIdx,
                 prevLogTerm  = matchIdxTerm,
-                entries      = if seek then Chunk.empty else entries
+                entries      = entries
               )
 
             rpc.appendEntries(node, request).flatMap:
@@ -145,31 +153,31 @@ object Leader:
 
         for
           matchIdx: Option[Index] <-
-            st.getMatchIndex(node)
+            cl.getMatchIndex(node)
 
           result: Either[NodeInfo[S], Index] <-
             go(matchIdx.getOrElse(newIdx), node, seek = false)
 
           out: Option[NodeInfo[S]] <- result match
             case Left(newState)     => F.pure(Some(newState))
-            case Right(newMatchIdx) => st.setMatchIndex(node, newMatchIdx) as None
+            case Right(newMatchIdx) => cl.setMatchIndex(node, newMatchIdx) as None
         yield out
 
       end send
 
       state.otherNodes.toList.map: node =>
-        st.uncommitted(cfg.heartbeatEvery, send(_, node))
+        cl.uncommitted(cfg.heartbeatEvery, send(_, node))
 
     end appender
 
-    def handleAppends(initState: S, st: CommitLog[F, A]): Stream[F, Nothing] =
+    def handleAppends(initState: S, cl: CommitLog[F, A]): Stream[F, Nothing] =
       appends.evalScan(initState):
         case (acc, (sink, entries)) =>
           val newState: S =
             entries.foldLeft(acc)(automaton)
 
           for
-            _ <- st.appendAndWait(state.otherNodes, state.term, entries)
+            _ <- cl.appendAndWait(state.otherNodes, state.term, entries)
             _ <- sink.complete_(newState)
           yield newState
       .drain
