@@ -11,8 +11,8 @@ case class NodeInfo[S](
   def print: String =
     s"${role.toString}(term = ${term.toInt})"
 
-  def isExternalMajority(externals: Set[NodeId]): Boolean =
-    (otherNodes intersect externals).size >= otherNodes.size
+  def allNodes: Set[NodeId] =
+    otherNodes + currentNode
 
   def transition(newRole: Role, termf: Term => Term): NodeInfo[S] =
     copy(role = newRole, term = termf(term))

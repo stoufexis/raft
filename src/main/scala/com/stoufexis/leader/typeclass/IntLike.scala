@@ -7,8 +7,6 @@ trait IntLike[A]:
 
   def toInt(a: A): Int
 
-  val ord: Ordering[A]
-
 object IntLike:
   extension [A](a: A)(using inc: IntLike[A])
     def toInt: Int = inc.toInt(a)
@@ -17,11 +15,11 @@ object IntLike:
 
     infix def -(i: Int): A = inc.add(a, -1 * i)
 
-    infix def >(b: A): Boolean = inc.ord.gt(a, b)
+    infix def >(b: A): Boolean = IntLikeOrdering[A].gt(a, b)
 
-    infix def <(b: A): Boolean = inc.ord.lt(a, b)
+    infix def <(b: A): Boolean = IntLikeOrdering[A].lt(a, b)
 
-    infix def <=(b: A): Boolean = inc.ord.lteq(a, b)
+    infix def <=(b: A): Boolean = IntLikeOrdering[A].lteq(a, b)
 
   given IntLikeInt: IntLike[Int] with
     def zero: Int = 0
@@ -30,4 +28,5 @@ object IntLike:
 
     def toInt(a: Int): Int = a
 
-    val ord: Ordering[Int] = summon
+  given IntLikeOrdering[A](using ia: IntLike[A]): Ordering[A] =
+    Ordering.fromLessThan((x, y) => ia.toInt(x) < ia.toInt(y))

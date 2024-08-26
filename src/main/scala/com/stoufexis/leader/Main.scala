@@ -114,15 +114,15 @@ import com.stoufexis.leader.util.raceFirstOrError
 
 object Main extends IOApp.Simple:
   val streams =
-    List(
-      Stream.awakeDelay[IO](1.second).evalTap(d => IO.println(d)),
-      Stream.awakeDelay[IO](1.second).evalTap(d => IO.println(d)),
-      Stream.awakeDelay[IO](1.second).evalTap(d => IO.println(d))
+    Stream(
+      Stream.awakeDelay[IO](100.millis).evalTap(d => IO.println(d)).onFinalizeCase(IO.println),
+      Stream.awakeDelay[IO](5.second).evalTap(d => IO.println(d)).onFinalizeCase(IO.println),
+      Stream.awakeDelay[IO](10.second).evalTap(d => IO.println(d)).onFinalizeCase(IO.println)
     )
 
   def run =
     for
-      f <- raceFirstOrError(streams).flatMap(d => IO.println("Done "+d)).start
+      f <- streams.parJoinUnbounded.take(1).compile.lastOrError.flatMap(d => IO.println("Done "+d)).start
       _ <- IO.readLine
       _ <- f.cancel
     yield ()

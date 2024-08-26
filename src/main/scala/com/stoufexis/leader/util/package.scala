@@ -6,6 +6,7 @@ import cats.implicits.given
 import fs2.*
 
 import scala.concurrent.duration.FiniteDuration
+import com.stoufexis.leader.model.NodeId
 
 extension [F[_]: Monad, A](deferred: DeferredSink[F, A])
   def complete_(a: A): F[Unit] = deferred.complete(a).void
@@ -68,6 +69,13 @@ extension [F[_], A](stream: Stream[F, A])
 
   def evalMapFilterAccumulate[S, B](init: S)(f: (S, A) => F[(S, Option[B])]): Stream[F, B] =
     stream.evalMapAccumulate(init)(f).mapFilter(_._2)
+
+  def mapFilterAccumulate[S, B](init: S)(f: (S, A) => (S, Option[B])): Stream[F, B] =
+    stream.mapAccumulate(init)(f).mapFilter(_._2)
+
+  def emitWhenUniqueOutputsReach[B](length: Int, emit: B): Stream[F, B] =
+    stream.mapFilterAccumulate(Set.empty[A]): (acc, next) =>
+      ???
 
 def raceFirst[F[_]: Concurrent, A](streams: Iterable[Stream[F, A]]): Stream[F, A] =
   Stream
