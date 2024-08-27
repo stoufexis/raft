@@ -5,6 +5,7 @@ import cats.effect.kernel.*
 import cats.effect.std.Queue
 import cats.effect.std.QueueSink
 import cats.effect.std.QueueSource
+import cats.effect.std.Supervisor
 import cats.implicits.given
 import fs2.*
 import fs2.concurrent.SignallingRef
@@ -204,26 +205,7 @@ object Leader:
       newIdxs:  Topic[F, Index], // A topic
       initS:    S
     ): Stream[F, Nothing] =
-      appends.flatMap: (sink, entries) =>
-        for
-          idx: Index <- Stream.eval:
-            log.appendChunk(state.term, entries)
-
-          // I have to start waiting before the idx is published to the nodes,
-          // so I don't miss a potentially instant response from any of them
-          _ <-
-            matchIdx
-              .subscribeUnbounded
-              // Emit unit when idx is committed
-              .evalMapFilterAccumulate[Unit, Unit](???)(???)
-              .take(1)
-              .evalMap(_ => sink.complete_(entries.foldLeft(initS)(automaton)))
-              .spawn
-
-          _ <- Stream.eval:
-            newIdxs.publishOrThrow(idx) >> sink.get
-        yield ()
-      .drain
+      ???
 
     val appends: Stream[F, (DeferredSink[F, S], Chunk[A])] =
       Stream.fromQueueUnterminated(appendsQ, 1)
