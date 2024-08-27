@@ -1,6 +1,7 @@
 package com.stoufexis.leader.statemachine
 
 import cats.*
+import cats.data.Op
 import cats.effect.kernel.*
 import cats.effect.std.Queue
 import cats.effect.std.QueueSink
@@ -8,6 +9,7 @@ import cats.effect.std.QueueSource
 import cats.effect.std.Supervisor
 import cats.implicits.given
 import fs2.*
+import fs2.concurrent.Channel
 import fs2.concurrent.SignallingRef
 import fs2.concurrent.Topic
 import fs2.concurrent.Topic.Closed
@@ -18,8 +20,6 @@ import com.stoufexis.leader.rpc.*
 import com.stoufexis.leader.service.*
 import com.stoufexis.leader.typeclass.IntLike.{*, given}
 import com.stoufexis.leader.util.*
-
-import scala.concurrent.duration.FiniteDuration
 
 trait Leader[F[_], A, S]:
   def run: Stream[F, NodeInfo[S]]
@@ -33,11 +33,9 @@ object Leader:
   case class WaitingClient[F[_]: Monad, S](
     idxStart: Index,
     idxEnd:   Index,
-    sink:     DeferredSink[F, Option[S]]
+    sink:     DeferredSink[F, S]
   ):
-    def complete(s: S): F[Unit] = sink.complete_(Some(s))
-
-    def deny: F[Unit] = sink.complete_(None)
+    def complete(s: S): F[Unit] = sink.complete_(s)
 
   /** Linearizability of reads is implemented quite inefficiently right now. A read is inserted as a
     * special entry in the log, and the read returns to the client only after the special entry is marked
@@ -63,10 +61,9 @@ object Leader:
     state:     NodeInfo[S],
     log:       Log[F, A],
     rpc:       RPC[F, A],
-    appends:   Stream[F, (DeferredSink[F, Option[S]], Chunk[A])],
     cfg:       Config,
     automaton: (S, A) => S
-  )(using F: Temporal[F], logger: Logger[F]): Stream[F, NodeInfo[S]] =
+  )(using F: Temporal[F], logger: Logger[F]): Stream[F, Leader[F, A, S]] =
 
     val handleIncomingAppends: Stream[F, NodeInfo[S]] =
       rpc.incomingAppends.evalMapFilter:
@@ -118,7 +115,13 @@ object Leader:
           case Left(_)   => F.raiseError(IllegalStateException("Topic is closed"))
           case Right(()) => F.unit
 
-    def nodeStateMachine(
+    extension [A](channel: Channel[F, A])
+      def sendOrThrow(a: A): F[Unit] =
+        channel.send(a).flatMap:
+          case Left(_)   => F.raiseError(IllegalStateException("Channel is closed"))
+          case Right(()) => F.unit
+
+    def appender(
       node:      NodeId,
       newIdxs:   Topic[F, Index],
       matchIdxs: Topic[F, (NodeId, Index)]
@@ -190,7 +193,7 @@ object Leader:
               result.left.toOption
           yield (newMatchIdx, output)
 
-    end nodeStateMachine
+    end appender
 
     def partitionChecker(matchIdxs: Topic[F, (NodeId, Index)]): Stream[F, NodeInfo[S]] =
       matchIdxs.subscribeUnbounded.resettableTimeoutAccumulate(
@@ -236,53 +239,61 @@ object Leader:
 
     end commitIdx
 
-    def clientHandler(
-      appends:  Stream[F, (DeferredSink[F, Option[S]], Chunk[A])],
+    def stateMachine(
+      appends:  Channel[F, (DeferredSink[F, S], Chunk[A])],
       matchIdx: Topic[F, (NodeId, Index)],
       newIdxs:  Topic[F, Index],
       initS:    S
     ): Stream[F, Nothing] =
       // Assumes that matchIdxs for each node always increase
-      val commitsAndAppends: Stream[F, Either[Index, (DeferredSink[F, Option[S]], Chunk[A])]] =
-        commitIdx(matchIdx).mergeEither(appends)
+      val commitsAndAppends: Stream[F, Either[Index, (DeferredSink[F, S], Chunk[A])]] =
+        commitIdx(matchIdx).mergeEither(appends.stream)
 
-      val acc: (Option[WaitingClient[F, S]], S) =
-        (Option.empty, initS)
+      val acc: (List[WaitingClient[F, S]], S) =
+        (List.empty, initS)
 
       commitsAndAppends.evalScanDrain(acc):
-        case ((Some(client), s), Left(commitIdx)) if client.idxEnd <= commitIdx =>
-          for
-            entries <- log.range(client.idxStart, client.idxEnd)
-            newS    <- F.pure(entries.foldLeft(s)(automaton))
-            _       <- client.complete(newS)
-          yield (None, newS)
+        case ((clients, s), Left(commitIdx)) =>
+          def complete(client: WaitingClient[F, S]): F[S] =
+            for
+              entries <- log.range(client.idxStart, client.idxEnd)
+              newS    <- F.pure(entries.foldLeft(s)(automaton))
+              _       <- client.complete(newS)
+            yield newS
 
-        case (st, Left(commitIdx)) =>
-          F.pure(st)
+          val (completable, rest) =
+            clients.partition(_.idxEnd <= commitIdx)
 
-        case ((None, s), Right((sink, entries))) =>
+          completable
+            .sortBy(_.idxEnd)(using Ordering[Index].reverse)
+            .traverse(complete)
+            .map(l => (rest, l.headOption.getOrElse(s)))
+
+        case ((clients, s), Right((sink, entries))) =>
           for
             (start, end) <- log.appendChunk(state.term, entries)
             _            <- newIdxs.publishOrThrow(end)
-          yield (Some(WaitingClient(start, end, sink)), s)
+          yield (WaitingClient(start, end, sink) :: clients, s)
 
-        case (st @ (Some(client), s), Right(_)) =>
-          client.deny as st
+    end stateMachine
 
-    end clientHandler
+    type Topics =
+      (Topic[F, Index], Topic[F, (NodeId, Index)], Channel[F, (DeferredSink[F, S], Chunk[A])])
 
-    val make: F[(Topic[F, Index], Topic[F, (NodeId, Index)])] =
-      Topic[F, Index].product(Topic[F, (NodeId, Index)])
+    val make: F[Topics] =
+      for
+        cidx    <- Topic[F, Index]
+        midx    <- Topic[F, (NodeId, Index)]
+        appends <- Channel.unbounded[F, (DeferredSink[F, S], Chunk[A])]
+      yield (cidx, midx, appends)
 
-    val release: ((Topic[F, Index], Topic[F, (NodeId, Index)])) => F[Unit] =
-      (x, y) => x.close >> y.close.void
-
-    val resource: Resource[F, (Topic[F, Index], Topic[F, (NodeId, Index)])] =
-      Resource.make(make)(release)
+    val topics: Resource[F, Topics] =
+      Resource.make(make): (x, y, z) =>
+        x.close >> y.close >> z.close.void
 
     for
-      (newIdxs: Topic[F, Index], matchIdxs: Topic[F, (NodeId, Index)]) <-
-        Stream.resource(resource)
+      (newIdxs, matchIdxs, appends) <-
+        Stream.resource(topics)
 
       initState: S <-
         log.readAll.fold(Monoid[S].empty)(automaton)
@@ -291,17 +302,28 @@ object Leader:
         partitionChecker(matchIdxs)
 
       client: Stream[F, Nothing] =
-        clientHandler(appends, matchIdxs, newIdxs, initState)
+        stateMachine(appends, matchIdxs, newIdxs, initState)
 
-      nodes: List[Stream[F, NodeInfo[S]]] =
+      appenders: List[Stream[F, NodeInfo[S]]] =
         state
           .allNodes
           .toList
-          .map(nodeStateMachine(_, newIdxs, matchIdxs))
+          .map(appender(_, newIdxs, matchIdxs))
 
-      out: NodeInfo[S] <-
-        Stream
-          .iterable(handleIncomingAppends :: handleIncomingVotes :: checker :: client :: nodes)
-          .parJoinUnbounded
-    yield out
+      streams: List[Stream[F, NodeInfo[S]]] =
+        handleIncomingAppends :: handleIncomingVotes :: checker :: appenders
+    yield new:
+      def run: Stream[F, NodeInfo[S]] =
+        Stream.iterable(streams).parJoinUnbounded
+
+      def write(as: Chunk[A]): F[S] =
+        for
+          deferred <- Deferred[F, S]
+          _        <- appends.sendOrThrow(deferred, as)
+          s        <- deferred.get
+        yield s
+
+      def read: F[S] =
+        write(Chunk.empty)
+
   end apply
