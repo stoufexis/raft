@@ -22,6 +22,16 @@ import com.stoufexis.leader.util.*
 import scala.concurrent.duration.FiniteDuration
 
 object Leader:
+
+  case class WaitingClient[F[_]: Monad, S](
+    idxStart: Index,
+    idxEnd:   Index,
+    sink:     DeferredSink[F, Option[S]]
+  ):
+    def complete(s: S): F[Unit] = sink.complete_(Some(s))
+
+    def deny: F[Unit] = sink.complete_(None)
+
   /** Linearizability of reads is implemented quite inefficiently right now. A read is inserted as a
     * special entry in the log, and the read returns to the client only after the special entry is marked
     * as committed. Section "6.4 Processing read-only queries more efficiently" of the [Raft
@@ -41,14 +51,12 @@ object Leader:
     * @param automaton
     * @param F
     * @return
-    *
-    * TODO: Implement demotion on timeout
     */
   def apply[F[_], A, S: Monoid](
     state:     NodeInfo[S],
     log:       Log[F, A],
     rpc:       RPC[F, A],
-    appendsQ:  QueueSource[F, (DeferredSink[F, S], Chunk[A])],
+    appendsQ:  QueueSource[F, (DeferredSink[F, Option[S]], Chunk[A])],
     cfg:       Config,
     automaton: (S, A) => S
   )(using F: Temporal[F], logger: Logger[F]): Stream[F, NodeInfo[S]] =
@@ -146,7 +154,7 @@ object Leader:
                 pinged() >> go(matchIdx - 1, seek = true)
 
               case AppendResponse.TermExpired(t) =>
-                pinged() >> F.pure(Left(state.toFollower(t)))
+                pinged() as Left(state.toFollower(t))
 
               case AppendResponse.IllegalState(msg) =>
                 F.raiseError(IllegalStateException(msg))
@@ -162,17 +170,18 @@ object Leader:
         (latest ++ newIdxs.subscribeUnbounded)
           .timeoutOnPullTo(cfg.heartbeatEvery, latest)
 
-      newIdxOrHeartbeat.evalMapFilterAccumulate(Option.empty[Index]): (matchIdx, nextIdx) =>
-        for
-          result: Either[NodeInfo[S], Index] <-
-            send(matchIdx.getOrElse(nextIdx))
+      newIdxOrHeartbeat
+        .evalMapFilterAccumulate(Option.empty[Index]): (matchIdx, nextIdx) =>
+          for
+            result: Either[NodeInfo[S], Index] <-
+              send(matchIdx.getOrElse(nextIdx))
 
-          newMatchIdx: Option[Index] =
-            result.toOption <+> matchIdx
+            newMatchIdx: Option[Index] =
+              result.toOption <+> matchIdx
 
-          output: Option[NodeInfo[S]] =
-            result.left.toOption
-        yield (newMatchIdx, output)
+            output: Option[NodeInfo[S]] =
+              result.left.toOption
+          yield (newMatchIdx, output)
 
     end nodeStateMachine
 
@@ -199,50 +208,39 @@ object Leader:
 
     end partitionChecker
 
-    case class WaitingClient(idxStart: Index, idxEnd: Index, sink: DeferredSink[F, Option[S]]):
-      def complete(s: S): F[Unit] = sink.complete_(Some(s))
-
-      def deny: F[Unit] = sink.complete_(None)
-
-    // Assumes that matchIdxs for each node always increase
     def commitIdx(matchIdx: Topic[F, (NodeId, Index)]): Stream[F, Index] =
       matchIdx
         .subscribeUnbounded
-        .mapFilterAccumulate(Map.empty[NodeId, Index]):
+        .evalMapFilterAccumulate(Map.empty[NodeId, Index]):
           case (acc, (node, idx)) =>
             val nodes: Map[NodeId, Index] =
               acc.updated(node, idx)
 
-            val majorityIndex: Int =
-              state.allNodes.size / 2
-
-            val nodesWeCareAbout: Map[NodeId, Index] =
-              nodes.filter((n, _) => state.allNodes(n))
-
             val cidx: Option[Index] =
-              nodesWeCareAbout
+              nodes
+                .filter((n, _) => state.allNodes(n))
                 .toVector
-                .sortBy(_._2)(using Ordering[Index].reverse)
-                .get(majorityIndex)
                 .map(_._2)
-            
-            (nodes, cidx)
-        .evalTap: i =>
-          logger.debug(s"Commit index is now at $i")
+                .sorted(using Ordering[Index].reverse)
+                .get(state.allNodes.size / 2)
+
+            logger.debug(s"Commit index is now at $cidx") as (nodes, cidx)
+        .discrete
 
     end commitIdx
 
     def clientHandler(
-      appends:  Stream[F, (Deferred[F, Option[S]], Chunk[A])],
+      appends:  Stream[F, (DeferredSink[F, Option[S]], Chunk[A])],
       matchIdx: Topic[F, (NodeId, Index)],
       newIdxs:  Topic[F, Index],
       initS:    S
     ): Stream[F, Nothing] =
-      val commitsAndAppends: Stream[F, Either[Index, (Deferred[F, Option[S]], Chunk[A])]] =
+      // Assumes that matchIdxs for each node always increase
+      val commitsAndAppends: Stream[F, Either[Index, (DeferredSink[F, Option[S]], Chunk[A])]] =
         commitIdx(matchIdx).mergeEither(appends)
 
-      val acc: (Option[WaitingClient], S) =
-        (Option.empty[WaitingClient], initS)
+      val acc: (Option[WaitingClient[F, S]], S) =
+        (Option.empty, initS)
 
       commitsAndAppends.evalScanDrain(acc):
         case ((Some(client), s), Left(commitIdx)) if client.idxEnd <= commitIdx =>
@@ -266,8 +264,34 @@ object Leader:
 
     end clientHandler
 
-    val appends: Stream[F, (DeferredSink[F, S], Chunk[A])] =
-      Stream.fromQueueUnterminated(appendsQ, 1)
+    for
+      newIdxs: Topic[F, Index] <-
+        Stream.eval(Topic.apply)
 
-    ???
+      matchIdxs: Topic[F, (NodeId, Index)] <-
+        Stream.eval(Topic.apply)
+
+      initState: S <-
+        log.readAll.fold(Monoid[S].empty)(automaton)
+
+      checker: Stream[F, NodeInfo[S]] =
+        partitionChecker(matchIdxs)
+
+      appends: Stream[F, (DeferredSink[F, Option[S]], Chunk[A])] =
+        Stream.fromQueueUnterminated(appendsQ, 1)
+
+      client: Stream[F, Nothing] =
+        clientHandler(appends, matchIdxs, newIdxs, initState)
+
+      nodes: List[Stream[F, NodeInfo[S]]] =
+        state
+          .allNodes
+          .toList
+          .map(nodeStateMachine(_, newIdxs, matchIdxs))
+
+      out: NodeInfo[S] <-
+        Stream
+          .iterable(handleIncomingAppends :: handleIncomingVotes :: checker :: client :: nodes)
+          .parJoinUnbounded
+    yield out
   end apply
