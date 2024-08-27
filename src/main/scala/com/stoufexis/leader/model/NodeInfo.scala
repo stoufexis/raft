@@ -14,6 +14,12 @@ case class NodeInfo[S](
   def allNodes: Set[NodeId] =
     otherNodes + currentNode
 
+  def majorityCnt: Int =
+    allNodes.size / 2 + 1
+
+  def isMajority(nodes: Set[NodeId]): Boolean =
+    (nodes intersect allNodes).size >= majorityCnt
+
   def transition(newRole: Role, termf: Term => Term): NodeInfo[S] =
     copy(role = newRole, term = termf(term))
 

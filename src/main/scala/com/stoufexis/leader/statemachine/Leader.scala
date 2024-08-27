@@ -21,6 +21,13 @@ import com.stoufexis.leader.util.*
 
 import scala.concurrent.duration.FiniteDuration
 
+trait Leader[F[_], A, S]:
+  def run: Stream[F, NodeInfo[S]]
+
+  def write(a: Chunk[A]): F[S]
+
+  def read: F[S]
+
 object Leader:
 
   case class WaitingClient[F[_]: Monad, S](
@@ -56,7 +63,7 @@ object Leader:
     state:     NodeInfo[S],
     log:       Log[F, A],
     rpc:       RPC[F, A],
-    appendsQ:  QueueSource[F, (DeferredSink[F, Option[S]], Chunk[A])],
+    appends:   Stream[F, (DeferredSink[F, Option[S]], Chunk[A])],
     cfg:       Config,
     automaton: (S, A) => S
   )(using F: Temporal[F], logger: Logger[F]): Stream[F, NodeInfo[S]] =
@@ -201,7 +208,7 @@ object Leader:
           val debug: F[Unit] =
             logger.debug(s"Received response from $node")
 
-          if (newNodes intersect state.allNodes).size >= state.allNodes.size / 2 + 1 then
+          if state.isMajority(newNodes) then
             info as (Set(state.currentNode), ResettableTimeout.Reset())
           else
             debug as (newNodes, ResettableTimeout.Skip())
@@ -264,21 +271,24 @@ object Leader:
 
     end clientHandler
 
-    for
-      newIdxs: Topic[F, Index] <-
-        Stream.eval(Topic.apply)
+    val make: F[(Topic[F, Index], Topic[F, (NodeId, Index)])] =
+      Topic[F, Index].product(Topic[F, (NodeId, Index)])
 
-      matchIdxs: Topic[F, (NodeId, Index)] <-
-        Stream.eval(Topic.apply)
+    val release: ((Topic[F, Index], Topic[F, (NodeId, Index)])) => F[Unit] =
+      (x, y) => x.close >> y.close.void
+
+    val resource: Resource[F, (Topic[F, Index], Topic[F, (NodeId, Index)])] =
+      Resource.make(make)(release)
+
+    for
+      (newIdxs: Topic[F, Index], matchIdxs: Topic[F, (NodeId, Index)]) <-
+        Stream.resource(resource)
 
       initState: S <-
         log.readAll.fold(Monoid[S].empty)(automaton)
 
       checker: Stream[F, NodeInfo[S]] =
         partitionChecker(matchIdxs)
-
-      appends: Stream[F, (DeferredSink[F, Option[S]], Chunk[A])] =
-        Stream.fromQueueUnterminated(appendsQ, 1)
 
       client: Stream[F, Nothing] =
         clientHandler(appends, matchIdxs, newIdxs, initState)
