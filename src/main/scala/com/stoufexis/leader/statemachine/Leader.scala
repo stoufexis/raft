@@ -108,7 +108,51 @@ object Leader:
       matchIdxs: Topic[F, (NodeId, Index)]
     ): Stream[F, NodeInfo[S]] =
       def send(matchIdx: Index): F[Either[NodeInfo[S], Index]] =
-        ???
+        // Should be called whenever the node successfully responded, even if AppendEntries ultimately failed.
+        // It keeps the partitionChecker from timing out.
+        // Until we figure out the new matchIdx, re-send the previously valid matchIdx
+        def pinged(i: Index = matchIdx): F[Unit] =
+          matchIdxs.publishOrThrow((node, i))
+
+        def go(matchIdx: Index, seek: Boolean = false): F[Either[NodeInfo[S], Index]] =
+          val info: F[(Term, Chunk[A])] =
+            if seek then
+              log.term(matchIdx).map((_, Chunk.empty))
+            else
+              log.entriesAfter(matchIdx)
+
+          info.flatMap: (matchIdxTerm, entries) =>
+            val request: AppendEntries[A] =
+              AppendEntries(
+                leaderId     = state.currentNode,
+                term         = state.term,
+                prevLogIndex = matchIdx,
+                prevLogTerm  = matchIdxTerm,
+                entries      = entries
+              )
+
+            rpc.appendEntries(node, request).flatMap:
+              case AppendResponse.Accepted if seek =>
+                pinged() >> go(matchIdx, seek = false)
+
+              case AppendResponse.Accepted =>
+                val newMatchIdx: Index =
+                  matchIdx + entries.size
+
+                pinged(newMatchIdx) as Right(newMatchIdx)
+
+              case AppendResponse.NotConsistent =>
+                pinged() >> go(matchIdx - 1, seek = true)
+
+              case AppendResponse.TermExpired(t) =>
+                pinged() >> F.pure(Left(state.toFollower(t)))
+
+              case AppendResponse.IllegalState(msg) =>
+                F.raiseError(IllegalStateException(msg))
+        end go
+
+        go(matchIdx, seek = false)
+      end send
 
       val latest: Stream[F, Index] =
         Stream.eval(log.current)
@@ -128,6 +172,8 @@ object Leader:
           output: Option[NodeInfo[S]] =
             result.left.toOption
         yield (newMatchIdx, output)
+
+    end nodeStateMachine
 
     def partitionChecker(matchIdxs: Topic[F, (NodeId, Index)]): Stream[F, NodeInfo[S]] =
       matchIdxs.subscribeUnbounded.resettableTimeoutAccumulate(
