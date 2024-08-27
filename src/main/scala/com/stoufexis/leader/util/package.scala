@@ -26,6 +26,8 @@ enum ResettableTimeout[A] derives CanEqual:
       case Output(out) => onOutput(out)
 
 extension [F[_], A](stream: Stream[F, A])
+  def mergeEither[B](that: Stream[F, B]): Stream[F, Either[A, B]] =
+    ???
   // TODO: Test
   def resettableTimeoutAccumulate[S, B](
     init:      S,

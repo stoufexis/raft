@@ -8,6 +8,8 @@ import cats.effect.std.QueueSource
 import cats.implicits.given
 import fs2.*
 import fs2.concurrent.SignallingRef
+import fs2.concurrent.Topic
+import fs2.concurrent.Topic.Closed
 import org.typelevel.log4cats.Logger
 
 import com.stoufexis.leader.model.*
@@ -19,42 +21,6 @@ import com.stoufexis.leader.util.*
 import scala.concurrent.duration.FiniteDuration
 
 object Leader:
-  class CommitLog[F[_]: Monad, A](
-    log:       Log[F, A],
-    unmatched: SignallingRef[F, Index],
-    matchIdxs: SignallingRef[F, Map[NodeId, Index]]
-  ):
-    private def commitIdx(nodes: Set[NodeId]): Stream[F, Index] =
-      ???
-
-    /** Wait until a majority commits the entry. An empty entries indicates a read request. This still
-      * advances the index by appending a special entry to the log
-      */
-    def appendAndWait(nodes: Set[NodeId], term: Term, entries: Chunk[A]): F[Unit] =
-      ???
-
-    def getMatchIndex(node: NodeId): F[Option[Index]] =
-      ???
-
-    def setMatchIndex(node: NodeId, idx: Index): F[Unit] =
-      ???
-
-    def sendInfo(beginAt: Index): F[(Term, Chunk[A])] =
-      ???
-
-    def seekInfo(beginAt: Index): F[Term] =
-      ???
-
-    /** If there is no new index for repeatEvery duration, repeat the previous index. When starting up
-      * the latest index is sent imediatelly as heartbeat
-      */
-    def uncommitted(repeatEvery: FiniteDuration): Stream[F, Index] =
-      ???
-
-  object CommitLog:
-    def apply[F[_]: Temporal, A](log: Log[F, A]): F[CommitLog[F, A]] =
-      ???
-
   /** Linearizability of reads is implemented quite inefficiently right now. A read is inserted as a
     * special entry in the log, and the read returns to the client only after the special entry is marked
     * as committed. Section "6.4 Processing read-only queries more efficiently" of the [Raft
@@ -85,9 +51,6 @@ object Leader:
     cfg:       Config,
     automaton: (S, A) => S
   )(using F: Temporal[F], logger: Logger[F]): Stream[F, NodeInfo[S]] =
-
-    val appends: Stream[F, (DeferredSink[F, S], Chunk[A])] =
-      Stream.fromQueueUnterminated(appendsQ, 1)
 
     val handleIncomingAppends: Stream[F, NodeInfo[S]] =
       rpc.incomingAppends.evalMapFilter:
@@ -132,127 +95,221 @@ object Leader:
       * to follower. This makes sure that a partitioned leader will quickly stop acting as a leader, even
       * if it does not notice another leader with a higher term.
       */
-    def appender(cl: CommitLog[F, A]): Stream[F, NodeInfo[S]] =
-      type SendErr =
-        AppendResponse.TermExpired | AppendResponse.IllegalState
 
-      def send(newIdx: Index, node: NodeId): Stream[F, Option[SendErr]] =
-        def go(
-          matchIdx: Index,
-          node:     NodeId,
-          seek:     Boolean
-        ): Pull[F, Option[Either[SendErr, Index]], Unit] =
-          val info: Pull[F, Nothing, (Term, Chunk[A])] = Pull.eval:
-            if seek then
-              cl.seekInfo(matchIdx).map((_, Chunk.empty))
-            else
-              cl.sendInfo(matchIdx)
+    extension [A](topic: Topic[F, A])
+      def publishOrThrow(a: A): F[Unit] =
+        topic.publish1(a).flatMap:
+          case Left(_)   => F.raiseError(IllegalStateException("Topic is closed"))
+          case Right(()) => F.unit
 
-          info.flatMap: (matchIdxTerm, entries) =>
-            val request: AppendEntries[A] =
-              AppendEntries(
-                leaderId     = state.currentNode,
-                term         = state.term,
-                prevLogIndex = matchIdx,
-                prevLogTerm  = matchIdxTerm,
-                entries      = entries
-              )
+    def nodeStateMachine(
+      node:      NodeId,
+      newIdxs:   Topic[F, Index],
+      matchIdxs: Topic[F, (NodeId, Index)]
+    ): Stream[F, NodeInfo[S]] =
+      def send(matchIdx: Index): F[Either[NodeInfo[S], Index]] =
+        ???
 
-            Pull.eval(rpc.appendEntries(node, request)).flatMap:
-              case AppendResponse.Accepted if seek =>
-                Pull.output1(None) >> go(matchIdx, node, seek = false)
-              case AppendResponse.Accepted =>
-                Pull.output1(Some(Right(matchIdx + entries.size))) >> Pull.done
-              case AppendResponse.NotConsistent       => go(matchIdx - 1, node, seek = true)
-              case r @ AppendResponse.TermExpired(_)  => Pull.output1(Some(Left(r))) >> Pull.done
-              case r @ AppendResponse.IllegalState(_) => Pull.output1(Some(Left(r))) >> Pull.done
-        end go
+      val latest: Stream[F, Index] =
+        Stream.eval(log.current)
 
+      val newIdxOrHeartbeat: Stream[F, Index] =
+        (latest ++ newIdxs.subscribeUnbounded)
+          .timeoutOnPullTo(cfg.heartbeatEvery, latest)
+
+      newIdxOrHeartbeat.evalMapFilterAccumulate(Option.empty[Index]): (matchIdx, nextIdx) =>
         for
-          matchIdx: Option[Index] <-
-            Stream.eval(cl.getMatchIndex(node))
+          result: Either[NodeInfo[S], Index] <-
+            send(matchIdx.getOrElse(nextIdx))
 
-          result: Option[Either[SendErr, Index]] <-
-            go(matchIdx.getOrElse(newIdx), node, seek = false).stream
+          newMatchIdx: Option[Index] =
+            result.toOption <+> matchIdx
 
-          out: Option[SendErr] <- Stream.eval:
-            result match
-              case None             => F.pure(None)
-              case Some(Left(err))  => F.pure(Some(err))
-              case Some(Right(idx)) => cl.setMatchIndex(node, idx) as None
-        yield out
+          output: Option[NodeInfo[S]] =
+            result.left.toOption
+        yield (newMatchIdx, output)
 
-      end send
-
-      def node(id: NodeId): Stream[F, (NodeId, Option[SendErr])] =
-        cl.uncommitted(cfg.heartbeatEvery)
-          .flatMap(send(_, id))
-          .map((id, _))
-
-      val outputs: Stream[F, (NodeId, Option[SendErr])] =
-        Stream
-          .iterable(state.otherNodes)
-          .map(node)
-          .parJoinUnbounded
-
-      val init: Set[NodeId] =
-        Set(state.currentNode)
-
-      outputs.resettableTimeoutAccumulate(
-        init      = init,
+    def partitionChecker(matchIdxs: Topic[F, (NodeId, Index)]): Stream[F, NodeInfo[S]] =
+      matchIdxs.subscribeUnbounded.resettableTimeoutAccumulate(
+        init      = Set(state.currentNode),
         timeout   = cfg.staleAfter,
-        onTimeout = F.pure(state.transition(Role.Follower))
+        onTimeout = F.pure(state.toFollower)
       ):
-        case (nodes, (node, None)) =>
+        case (nodes, (node, _)) =>
           val newNodes: Set[NodeId] =
             nodes + node
 
           val info: F[Unit] =
             logger.info("Cluster majority reached, this node is still the leader")
 
-          if nodes.size >= (state.allNodes.size / 2 + 1) then
-            info as (init, ResettableTimeout.Reset())
+          val debug: F[Unit] =
+            logger.debug(s"Received response from $node")
+
+          if (newNodes intersect state.allNodes).size >= state.allNodes.size / 2 + 1 then
+            info as (Set(state.currentNode), ResettableTimeout.Reset())
           else
-            F.pure(newNodes, ResettableTimeout.Skip())
+            debug as (newNodes, ResettableTimeout.Skip())
 
-        case (nodes, (node, Some(AppendResponse.TermExpired(newTerm)))) if state.isNotNew(newTerm) =>
-          val warn: F[Unit] = logger.warn:
-            s"Got TermExpired with expired term $newTerm from $node"
+    end partitionChecker
 
-          warn as (nodes, ResettableTimeout.Skip())
+    def clientHandler(
+      appends:  Stream[F, (Deferred[F, S], Chunk[A])],
+      matchIdx: Topic[F, (NodeId, Index)],
+      newIdxs:  Topic[F, Index], // A topic
+      initS:    S
+    ): Stream[F, Nothing] =
+      appends.flatMap: (sink, entries) =>
+        for
+          idx: Index <- Stream.eval:
+            log.appendChunk(state.term, entries)
 
-        case (nodes, (node, Some(AppendResponse.TermExpired(newTerm)))) =>
-          val warn: F[Unit] = logger.warn:
-            s"Current term expired, new term: $newTerm"
+          // I have to start waiting before the idx is published to the nodes,
+          // so I don't miss a potentially instant response from any of them
+          _ <-
+            matchIdx
+              .subscribeUnbounded
+              // Emit unit when idx is committed
+              .evalMapFilterAccumulate[Unit, Unit](???)(???)
+              .take(1)
+              .evalMap(_ => sink.complete_(entries.foldLeft(initS)(automaton)))
+              .spawn
 
-          warn as (nodes, ResettableTimeout.Output(state.transition(Role.Follower, newTerm)))
-
-        case (_, (node, Some(AppendResponse.IllegalState(state)))) =>
-          F.raiseError(IllegalStateException(s"Node $node detected illegal state: $state"))
-
-    end appender
-
-    def handleAppends(initState: S, cl: CommitLog[F, A]): Stream[F, Nothing] =
-      appends.evalScan(initState):
-        case (acc, (sink, entries)) =>
-          val newState: S =
-            entries.foldLeft(acc)(automaton)
-
-          for
-            _ <- cl.appendAndWait(state.otherNodes, state.term, entries)
-            _ <- sink.complete_(newState)
-          yield newState
+          _ <- Stream.eval:
+            newIdxs.publishOrThrow(idx) >> sink.get
+        yield ()
       .drain
 
-    for
-      init: S <-
-        log.readAll.fold(Monoid[S].empty)(automaton)
+    val appends: Stream[F, (DeferredSink[F, S], Chunk[A])] =
+      Stream.fromQueueUnterminated(appendsQ, 1)
 
-      clog: CommitLog[F, A] <-
-        Stream.eval(CommitLog(log))
+    ???
+    // for
+    //   init: S <-
+    //     log.readAll.fold(Monoid[S].empty)(automaton)
 
-      out: NodeInfo[S] <-
-        Stream(handleIncomingAppends, handleIncomingVotes, handleAppends(init, clog), appender(clog))
-          .parJoinUnbounded
-    yield out
+    //   idxsTopic: Topic[F, Index] <-
+    //     Stream.eval(Topic[F, Index])
+
+    //   idxsTopic: Topic[F, Index] <-
+    //     Stream.eval(Topic[F, Index])
+
+    //   clog: CommitLog[F, A] <-
+    //      Stream.eval(CommitLog(log))
+
+    //   out: NodeInfo[S] <-
+    //     Stream(handleIncomingAppends, handleIncomingVotes, handleAppends(init, clog), appender(clog))
+    //       .parJoinUnbounded
+    // yield out
+    // def appender(cl: CommitLog[F, A]): Stream[F, NodeInfo[S]] =
+    //   type SendErr =
+    //     AppendResponse.TermExpired | AppendResponse.IllegalState
+
+    //   def send(newIdx: Index, node: NodeId): Stream[F, Option[SendErr]] =
+    //     def go(
+    //       matchIdx: Index,
+    //       node:     NodeId,
+    //       seek:     Boolean
+    //     ): Pull[F, Option[Either[SendErr, Index]], Unit] =
+    //       val info: Pull[F, Nothing, (Term, Chunk[A])] = Pull.eval:
+    //         if seek then
+    //           cl.seekInfo(matchIdx).map((_, Chunk.empty))
+    //         else
+    //           cl.sendInfo(matchIdx)
+
+    //       info.flatMap: (matchIdxTerm, entries) =>
+    //         val request: AppendEntries[A] =
+    //           AppendEntries(
+    //             leaderId     = state.currentNode,
+    //             term         = state.term,
+    //             prevLogIndex = matchIdx,
+    //             prevLogTerm  = matchIdxTerm,
+    //             entries      = entries
+    //           )
+
+    //         Pull.eval(rpc.appendEntries(node, request)).flatMap:
+    //           case AppendResponse.Accepted if seek =>
+    //             Pull.output1(None) >> go(matchIdx, node, seek = false)
+    //           case AppendResponse.Accepted =>
+    //             Pull.output1(Some(Right(matchIdx + entries.size))) >> Pull.done
+    //           case AppendResponse.NotConsistent       => go(matchIdx - 1, node, seek = true)
+    //           case r @ AppendResponse.TermExpired(_)  => Pull.output1(Some(Left(r))) >> Pull.done
+    //           case r @ AppendResponse.IllegalState(_) => Pull.output1(Some(Left(r))) >> Pull.done
+    //     end go
+
+    //     for
+    //       matchIdx: Option[Index] <-
+    //         Stream.eval(cl.getMatchIndex(node))
+
+    //       result: Option[Either[SendErr, Index]] <-
+    //         go(matchIdx.getOrElse(newIdx), node, seek = false).stream
+
+    //       out: Option[SendErr] <- Stream.eval:
+    //         result match
+    //           case None             => F.pure(None)
+    //           case Some(Left(err))  => F.pure(Some(err))
+    //           case Some(Right(idx)) => cl.setMatchIndex(node, idx) as None
+    //     yield out
+
+    //   end send
+
+    //   def node(id: NodeId): Stream[F, (NodeId, Option[SendErr])] =
+    //     cl.uncommitted(cfg.heartbeatEvery)
+    //       .flatMap(send(_, id))
+    //       .map((id, _))
+
+    //   val outputs: Stream[F, (NodeId, Option[SendErr])] =
+    //     Stream
+    //       .iterable(state.otherNodes)
+    //       .map(node)
+    //       .parJoinUnbounded
+
+    //   val init: Set[NodeId] =
+    //     Set(state.currentNode)
+
+    //   outputs.resettableTimeoutAccumulate(
+    //     init      = init,
+    //     timeout   = cfg.staleAfter,
+    //     onTimeout = F.pure(state.transition(Role.Follower))
+    //   ):
+    //     case (nodes, (node, None)) =>
+    //       val newNodes: Set[NodeId] =
+    //         nodes + node
+
+    //       val info: F[Unit] =
+    //         logger.info("Cluster majority reached, this node is still the leader")
+
+    //       if nodes.size >= (state.allNodes.size / 2 + 1) then
+    //         info as (init, ResettableTimeout.Reset())
+    //       else
+    //         F.pure(newNodes, ResettableTimeout.Skip())
+
+    //     case (nodes, (node, Some(AppendResponse.TermExpired(newTerm)))) if state.isNotNew(newTerm) =>
+    //       val warn: F[Unit] = logger.warn:
+    //         s"Got TermExpired with expired term $newTerm from $node"
+
+    //       warn as (nodes, ResettableTimeout.Skip())
+
+    //     case (nodes, (node, Some(AppendResponse.TermExpired(newTerm)))) =>
+    //       val warn: F[Unit] = logger.warn:
+    //         s"Current term expired, new term: $newTerm"
+
+    //       warn as (nodes, ResettableTimeout.Output(state.transition(Role.Follower, newTerm)))
+
+    //     case (_, (node, Some(AppendResponse.IllegalState(state)))) =>
+    //       F.raiseError(IllegalStateException(s"Node $node detected illegal state: $state"))
+
+    // end appender
+
+    // def handleAppends(initState: S, cl: CommitLog[F, A]): Stream[F, Nothing] =
+    //   appends.evalScan(initState):
+    //     case (acc, (sink, entries)) =>
+    //       val newState: S =
+    //         entries.foldLeft(acc)(automaton)
+
+    //       for
+    //         _ <- cl.appendAndWait(state.otherNodes, state.term, entries)
+    //         _ <- sink.complete_(newState)
+    //       yield newState
+    //   .drain
+
   end apply

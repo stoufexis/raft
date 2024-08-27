@@ -5,6 +5,13 @@ import fs2.*
 import scala.concurrent.duration.FiniteDuration
 
 trait Log[F[_], A]:
+  // empty chunk should advance the index. User for linearizable reads
+  def appendChunk(term: Term, entry: Chunk[A]): F[Index]
+
+  def range(from: Index, until: Index): F[Chunk[A]]
+
+  def current: F[Index]
+
   def append(term: Term, entry: A): F[Index]
 
   def entriesAfter(index: Index): F[(Term, Chunk[A])]
