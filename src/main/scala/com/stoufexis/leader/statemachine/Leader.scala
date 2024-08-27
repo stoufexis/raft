@@ -204,8 +204,33 @@ object Leader:
 
       def deny: F[Unit] = sink.complete_(None)
 
+    // Assumes that matchIdxs for each node always increase
     def commitIdx(matchIdx: Topic[F, (NodeId, Index)]): Stream[F, Index] =
-      ???
+      matchIdx
+        .subscribeUnbounded
+        .mapFilterAccumulate(Map.empty[NodeId, Index]):
+          case (acc, (node, idx)) =>
+            val nodes: Map[NodeId, Index] =
+              acc.updated(node, idx)
+
+            val majorityIndex: Int =
+              state.allNodes.size / 2
+
+            val nodesWeCareAbout: Map[NodeId, Index] =
+              nodes.filter((n, _) => state.allNodes(n))
+
+            val cidx: Option[Index] =
+              nodesWeCareAbout
+                .toVector
+                .sortBy(_._2)(using Ordering[Index].reverse)
+                .get(majorityIndex)
+                .map(_._2)
+            
+            (nodes, cidx)
+        .evalTap: i =>
+          logger.debug(s"Commit index is now at $i")
+
+    end commitIdx
 
     def clientHandler(
       appends:  Stream[F, (Deferred[F, Option[S]], Chunk[A])],
@@ -231,9 +256,10 @@ object Leader:
           F.pure(st)
 
         case ((None, s), Right((sink, entries))) =>
-          log
-            .appendChunk(state.term, entries)
-            .map((start, end) => (Some(WaitingClient(start, end, sink)), s))
+          for
+            (start, end) <- log.appendChunk(state.term, entries)
+            _            <- newIdxs.publishOrThrow(end)
+          yield (Some(WaitingClient(start, end, sink)), s)
 
         case (st @ (Some(client), s), Right(_)) =>
           client.deny as st
