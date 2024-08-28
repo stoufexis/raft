@@ -1,7 +1,10 @@
 package com.stoufexis.leader.statemachine
 
 import cats.*
+import cats.effect.implicits.given
 import cats.effect.kernel.*
+import cats.effect.kernel.Resource.ExitCase
+import cats.effect.std.Supervisor
 import cats.implicits.given
 import fs2.*
 import org.typelevel.log4cats.Logger
@@ -12,7 +15,7 @@ import com.stoufexis.leader.typeclass.IntLike.{*, given}
 import com.stoufexis.leader.util.*
 
 trait Leader[F[_], A, S]:
-  def await: F[NodeInfo[S]]
+  def await: F[Outcome[F, Throwable, NodeInfo[S]]]
 
   def write(a: Chunk[A]): F[Option[S]]
 
@@ -52,7 +55,7 @@ object Leader:
     rpc:       RPC[F, A],
     cfg:       Config,
     automaton: (S, A) => S
-  )(using F: Temporal[F], logger: Logger[F]): Stream[F, Leader[F, A, S]] =
+  )(using F: Temporal[F], logger: Logger[F]): Resource[F, Leader[F, A, S]] =
 
     val handleIncomingAppends: Stream[F, NodeInfo[S]] =
       rpc.incomingAppends.evalMapFilter:
@@ -251,12 +254,11 @@ object Leader:
 
     end stateMachine
 
-    type Topics =
-      (
-        CloseableTopic[F, Index],
-        CloseableTopic[F, (NodeId, Index)],
-        CloseableTopic[F, (DeferredSink[F, Option[S]], Chunk[A])]
-      )
+    type Topics = (
+      CloseableTopic[F, Index],
+      CloseableTopic[F, (NodeId, Index)],
+      CloseableTopic[F, (DeferredSink[F, Option[S]], Chunk[A])]
+    )
 
     val topics: F[Topics] =
       for
@@ -270,41 +272,51 @@ object Leader:
 
     // Closes the topics after a single NodeInfo[S] is produced
     // Closing the topics interrupts subscribers and makes publishes no-ops
+    // Any further writes or reads will return None
     for
-      tps @ (newIdxs, matchIdxs, appends) <-
-        Stream.eval(topics)
+      sup <- Supervisor[F](await = false)
 
-      initState: S <-
-        log.readAll.fold(Monoid[S].empty)(automaton)
+      (closeGate, appends) <- Resource.eval:
+        for
+          tps @ (newIdxs, matchIdxs, appends) <-
+            topics
 
-      checker: Stream[F, NodeInfo[S]] =
-        partitionChecker(matchIdxs)
+          initState: S <-
+            log.readAll
+              .fold(Monoid[S].empty)(automaton)
+              .compile
+              .lastOrError
 
-      client: Stream[F, Nothing] =
-        stateMachine(appends, matchIdxs, newIdxs, initState)
+          checker: Stream[F, NodeInfo[S]] =
+            partitionChecker(matchIdxs)
 
-      appenders: List[Stream[F, NodeInfo[S]]] =
-        state
-          .allNodes
-          .toList
-          .map(appender(_, newIdxs, matchIdxs))
+          client: Stream[F, Nothing] =
+            stateMachine(appends, matchIdxs, newIdxs, initState)
 
-      streams: List[Stream[F, NodeInfo[S]]] =
-        handleIncomingAppends :: handleIncomingVotes :: checker :: appenders
+          appenders: List[Stream[F, NodeInfo[S]]] =
+            state
+              .allNodes
+              .toList
+              .map(appender(_, newIdxs, matchIdxs))
 
-      closeGate: Deferred[F, NodeInfo[S]] <-
-        Stream.eval(F.deferred)
+          streams: List[Stream[F, NodeInfo[S]]] =
+            handleIncomingAppends :: handleIncomingVotes :: checker :: appenders
 
-      _ <-
-        Stream
-          .iterable(streams)
-          .parJoinUnbounded
-          .take(1)
-          .evalMap(closeGate.complete)
-          .onFinalize(closeAll(tps))
-          .spawn
+          close: Deferred[F, Outcome[F, Throwable, NodeInfo[S]]] <-
+            F.deferred
+
+          _ <-
+            sup.supervise:
+              Stream
+                .iterable(streams)
+                .parJoinUnbounded
+                .take(1)
+                .compile
+                .lastOrError
+                .guaranteeCase(o => close.complete_(o) >> closeAll(tps))
+        yield (close, appends)
     yield new:
-      def await: F[NodeInfo[S]] =
+      def await: F[Outcome[F, Throwable, NodeInfo[S]]] =
         closeGate.get
 
       def write(as: Chunk[A]): F[Option[S]] =
@@ -314,13 +326,8 @@ object Leader:
             s        <- appends.publish(deferred, as).ifM(deferred.get, F.pure(None))
           yield s
 
-        closeGate.tryGet.flatMap:
-          case None =>
-            F.race(closeGate.get, wrote)
-              .map(_.toOption.flatten)
-
-          case Some(_) =>
-            F.pure(None)
+        F.race(closeGate.get, wrote)
+          .map(_.toOption.flatten)
 
       def read: F[Option[S]] =
         write(Chunk.empty)
