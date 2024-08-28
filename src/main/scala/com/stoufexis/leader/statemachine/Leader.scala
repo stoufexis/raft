@@ -22,20 +22,19 @@ import com.stoufexis.leader.typeclass.IntLike.{*, given}
 import com.stoufexis.leader.util.*
 
 trait Leader[F[_], A, S]:
-  def run: Stream[F, NodeInfo[S]]
+  def run: F[NodeInfo[S]]
 
-  def write(a: Chunk[A]): F[S]
+  def write(a: Chunk[A]): F[Option[S]]
 
-  def read: F[S]
+  def read: F[Option[S]]
 
 object Leader:
 
   case class WaitingClient[F[_]: Monad, S](
     idxStart: Index,
     idxEnd:   Index,
-    sink:     DeferredSink[F, S]
-  ):
-    def complete(s: S): F[Unit] = sink.complete_(s)
+    sink:     DeferredSink[F, Option[S]]
+  )
 
   /** Linearizability of reads is implemented quite inefficiently right now. A read is inserted as a
     * special entry in the log, and the read returns to the client only after the special entry is marked
@@ -240,51 +239,50 @@ object Leader:
     end commitIdx
 
     def stateMachine(
-      appends:  Channel[F, (DeferredSink[F, S], Chunk[A])],
+      appends:  Channel[F, (DeferredSink[F, Option[S]], Chunk[A])],
       matchIdx: Topic[F, (NodeId, Index)],
       newIdxs:  Topic[F, Index],
       initS:    S
     ): Stream[F, Nothing] =
       // Assumes that matchIdxs for each node always increase
-      val commitsAndAppends: Stream[F, Either[Index, (DeferredSink[F, S], Chunk[A])]] =
+      val commitsAndAppends: Stream[F, Either[Index, (DeferredSink[F, Option[S]], Chunk[A])]] =
         commitIdx(matchIdx).mergeEither(appends.stream)
 
-      val acc: (List[WaitingClient[F, S]], S) =
-        (List.empty, initS)
+      val acc: (Option[WaitingClient[F, S]], S) =
+        (None, initS)
 
       commitsAndAppends.evalScanDrain(acc):
-        case ((clients, s), Left(commitIdx)) =>
+        case ((client, s), Left(commitIdx)) =>
           def complete(client: WaitingClient[F, S]): F[S] =
             for
               entries <- log.range(client.idxStart, client.idxEnd)
               newS    <- F.pure(entries.foldLeft(s)(automaton))
-              _       <- client.complete(newS)
+              _       <- client.sink.complete_(Some(newS))
             yield newS
 
-          val (completable, rest) =
-            clients.partition(_.idxEnd <= commitIdx)
-
-          completable
-            .sortBy(_.idxEnd)(using Ordering[Index].reverse)
+          client
             .traverse(complete)
-            .map(l => (rest, l.headOption.getOrElse(s)))
+            .map(o => (None, o.getOrElse(s)))
 
-        case ((clients, s), Right((sink, entries))) =>
+        case (st @ (Some(_), _), Right((sink, _))) =>
+          sink.complete(None) as st
+
+        case ((None, s), Right((sink, entries))) =>
           for
             (start, end) <- log.appendChunk(state.term, entries)
             _            <- newIdxs.publishOrThrow(end)
-          yield (WaitingClient(start, end, sink) :: clients, s)
+          yield (Some(WaitingClient(start, end, sink)), s)
 
     end stateMachine
 
     type Topics =
-      (Topic[F, Index], Topic[F, (NodeId, Index)], Channel[F, (DeferredSink[F, S], Chunk[A])])
+      (Topic[F, Index], Topic[F, (NodeId, Index)], Channel[F, (DeferredSink[F, Option[S]], Chunk[A])])
 
     val make: F[Topics] =
       for
         cidx    <- Topic[F, Index]
         midx    <- Topic[F, (NodeId, Index)]
-        appends <- Channel.unbounded[F, (DeferredSink[F, S], Chunk[A])]
+        appends <- Channel.unbounded[F, (DeferredSink[F, Option[S]], Chunk[A])]
       yield (cidx, midx, appends)
 
     val topics: Resource[F, Topics] =
@@ -313,17 +311,26 @@ object Leader:
       streams: List[Stream[F, NodeInfo[S]]] =
         handleIncomingAppends :: handleIncomingVotes :: checker :: appenders
     yield new:
-      def run: Stream[F, NodeInfo[S]] =
-        Stream.iterable(streams).parJoinUnbounded
+      def run: F[NodeInfo[S]] =
+        Stream
+          .iterable(streams)
+          .parJoinUnbounded
+          .take(1)
+          .compile
+          .lastOrError
 
-      def write(as: Chunk[A]): F[S] =
-        for
-          deferred <- Deferred[F, S]
-          _        <- appends.sendOrThrow(deferred, as)
-          s        <- deferred.get
-        yield s
+      def write(as: Chunk[A]): F[Option[S]] =
+        val wrote: F[Option[S]] =
+          for
+            deferred <- Deferred[F, Option[S]]
+            _        <- appends.sendOrThrow(deferred, as)
+            s        <- deferred.get
+          yield s
 
-      def read: F[S] =
+        F.race(wrote, appends.closed as None)
+          .map(_.fold(identity, identity))
+
+      def read: F[Option[S]] =
         write(Chunk.empty)
 
   end apply

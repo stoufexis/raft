@@ -11,10 +11,10 @@ import io.grpc.ServerServiceDefinition
 import io.grpc.netty.shaded.io.grpc.netty.*
 
 import com.stoufexis.leader.proto.protos.*
-import com.stoufexis.leader.util.raceFirstOrError
 
 import scala.annotation.unused
 import scala.concurrent.duration.*
+import com.stoufexis.leader.util.raceFirstOrError
 
 /*
   TODOS For leader
@@ -113,16 +113,16 @@ import scala.concurrent.duration.*
 //   def run: IO[Unit] = client
 
 object Main extends IOApp.Simple:
-  val streams: Stream[IO, Int] =
-    Stream.awakeDelay[IO](100.millis).evalTap(d => IO.println(d)).map(_ => 1).onFinalizeCase(IO.println)
-      .interleaveAll(Stream.awakeDelay[IO](5.second).evalTap(d => IO.println(d)).map(_ =>
-        2
-      ).onFinalizeCase(IO.println))
+  val streams =
+    Stream(
+      Stream.awakeDelay[IO](100.millis).evalTap(d => IO.println(d)).onFinalizeCase(IO.println),
+      Stream.awakeDelay[IO](5.second).evalTap(d => IO.println(d)).onFinalizeCase(IO.println),
+      Stream.awakeDelay[IO](10.second).evalTap(d => IO.println(d)).onFinalizeCase(IO.println)
+    )
 
   def run =
     for
-      f <-
-        streams.evalMap(d => IO.println("Done " + d)).compile.drain.start
+      f <- streams.parJoinUnbounded.take(1).compile.lastOrError.flatMap(d => IO.println("Done "+d)).start
       _ <- IO.readLine
       _ <- f.cancel
     yield ()
