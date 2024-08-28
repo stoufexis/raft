@@ -310,6 +310,10 @@ object Leader:
 
       streams: List[Stream[F, NodeInfo[S]]] =
         handleIncomingAppends :: handleIncomingVotes :: checker :: appenders
+
+      shuttingDown: Deferred[F, Unit] <-
+        Stream.eval(F.deferred)
+      
     yield new:
       def run: F[NodeInfo[S]] =
         Stream
@@ -318,6 +322,7 @@ object Leader:
           .take(1)
           .compile
           .lastOrError
+          .flatTap(_ => shuttingDown.complete_)
 
       def write(as: Chunk[A]): F[Option[S]] =
         val wrote: F[Option[S]] =
@@ -327,7 +332,10 @@ object Leader:
             s        <- deferred.get
           yield s
 
-        F.race(wrote, appends.closed as None)
+        val shutdown: F[Option[S]] =
+          F.race(appends.closed, shuttingDown.get) as None
+
+        F.race(wrote, shutdown)
           .map(_.fold(identity, identity))
 
       def read: F[Option[S]] =
