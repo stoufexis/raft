@@ -1,28 +1,18 @@
 package com.stoufexis.leader.statemachine
 
 import cats.*
-import cats.data.Op
 import cats.effect.kernel.*
-import cats.effect.std.Queue
-import cats.effect.std.QueueSink
-import cats.effect.std.QueueSource
-import cats.effect.std.Supervisor
 import cats.implicits.given
 import fs2.*
-import fs2.concurrent.Channel
-import fs2.concurrent.SignallingRef
-import fs2.concurrent.Topic
-import fs2.concurrent.Topic.Closed
 import org.typelevel.log4cats.Logger
 
 import com.stoufexis.leader.model.*
 import com.stoufexis.leader.rpc.*
-import com.stoufexis.leader.service.*
 import com.stoufexis.leader.typeclass.IntLike.{*, given}
 import com.stoufexis.leader.util.*
 
 trait Leader[F[_], A, S]:
-  def run: F[NodeInfo[S]]
+  def await: F[NodeInfo[S]]
 
   def write(a: Chunk[A]): F[Option[S]]
 
@@ -108,29 +98,17 @@ object Leader:
       * if it does not notice another leader with a higher term.
       */
 
-    extension [A](topic: Topic[F, A])
-      def publishOrThrow(a: A): F[Unit] =
-        topic.publish1(a).flatMap:
-          case Left(_)   => F.raiseError(IllegalStateException("Topic is closed"))
-          case Right(()) => F.unit
-
-    extension [A](channel: Channel[F, A])
-      def sendOrThrow(a: A): F[Unit] =
-        channel.send(a).flatMap:
-          case Left(_)   => F.raiseError(IllegalStateException("Channel is closed"))
-          case Right(()) => F.unit
-
     def appender(
       node:      NodeId,
-      newIdxs:   Topic[F, Index],
-      matchIdxs: Topic[F, (NodeId, Index)]
+      newIdxs:   CloseableTopic[F, Index],
+      matchIdxs: CloseableTopic[F, (NodeId, Index)]
     ): Stream[F, NodeInfo[S]] =
       def send(matchIdx: Index): F[Either[NodeInfo[S], Index]] =
         // Should be called whenever the node successfully responded, even if AppendEntries ultimately failed.
         // It keeps the partitionChecker from timing out.
         // Until we figure out the new matchIdx, re-send the previously valid matchIdx
         def pinged(i: Index = matchIdx): F[Unit] =
-          matchIdxs.publishOrThrow((node, i))
+          matchIdxs.publish((node, i)).void
 
         def go(matchIdx: Index, seek: Boolean = false): F[Either[NodeInfo[S], Index]] =
           val info: F[(Term, Chunk[A])] =
@@ -176,7 +154,7 @@ object Leader:
         Stream.eval(log.current)
 
       val newIdxOrHeartbeat: Stream[F, Index] =
-        (latest ++ newIdxs.subscribeUnbounded)
+        (latest ++ newIdxs.subscribe)
           .timeoutOnPullTo(cfg.heartbeatEvery, latest)
 
       newIdxOrHeartbeat
@@ -194,8 +172,8 @@ object Leader:
 
     end appender
 
-    def partitionChecker(matchIdxs: Topic[F, (NodeId, Index)]): Stream[F, NodeInfo[S]] =
-      matchIdxs.subscribeUnbounded.resettableTimeoutAccumulate(
+    def partitionChecker(matchIdxs: CloseableTopic[F, (NodeId, Index)]): Stream[F, NodeInfo[S]] =
+      matchIdxs.subscribe.resettableTimeoutAccumulate(
         init      = Set(state.currentNode),
         timeout   = cfg.staleAfter,
         onTimeout = F.pure(state.toFollower)
@@ -217,36 +195,34 @@ object Leader:
 
     end partitionChecker
 
-    def commitIdx(matchIdx: Topic[F, (NodeId, Index)]): Stream[F, Index] =
-      matchIdx
-        .subscribeUnbounded
-        .evalMapFilterAccumulate(Map.empty[NodeId, Index]):
-          case (acc, (node, idx)) =>
-            val nodes: Map[NodeId, Index] =
-              acc.updated(node, idx)
+    def commitIdx(matchIdx: CloseableTopic[F, (NodeId, Index)]): Stream[F, Index] =
+      matchIdx.subscribe.evalMapFilterAccumulate(Map.empty[NodeId, Index]):
+        case (acc, (node, idx)) =>
+          val nodes: Map[NodeId, Index] =
+            acc.updated(node, idx)
 
-            val cidx: Option[Index] =
-              nodes
-                .filter((n, _) => state.allNodes(n))
-                .toVector
-                .map(_._2)
-                .sorted(using Ordering[Index].reverse)
-                .get(state.allNodes.size / 2)
+          val cidx: Option[Index] =
+            nodes
+              .filter((n, _) => state.allNodes(n))
+              .toVector
+              .map(_._2)
+              .sorted(using Ordering[Index].reverse)
+              .get(state.allNodes.size / 2)
 
-            logger.debug(s"Commit index is now at $cidx") as (nodes, cidx)
-        .discrete
+          logger.debug(s"Commit index is now at $cidx") as (nodes, cidx)
+      .discrete
 
     end commitIdx
 
     def stateMachine(
-      appends:  Channel[F, (DeferredSink[F, Option[S]], Chunk[A])],
-      matchIdx: Topic[F, (NodeId, Index)],
-      newIdxs:  Topic[F, Index],
+      appends:  CloseableTopic[F, (DeferredSink[F, Option[S]], Chunk[A])],
+      matchIdx: CloseableTopic[F, (NodeId, Index)],
+      newIdxs:  CloseableTopic[F, Index],
       initS:    S
     ): Stream[F, Nothing] =
       // Assumes that matchIdxs for each node always increase
       val commitsAndAppends: Stream[F, Either[Index, (DeferredSink[F, Option[S]], Chunk[A])]] =
-        commitIdx(matchIdx).mergeEither(appends.stream)
+        commitIdx(matchIdx).mergeEither(appends.subscribe)
 
       val acc: (Option[WaitingClient[F, S]], S) =
         (None, initS)
@@ -270,28 +246,33 @@ object Leader:
         case ((None, s), Right((sink, entries))) =>
           for
             (start, end) <- log.appendChunk(state.term, entries)
-            _            <- newIdxs.publishOrThrow(end)
+            _            <- newIdxs.publish(end)
           yield (Some(WaitingClient(start, end, sink)), s)
 
     end stateMachine
 
     type Topics =
-      (Topic[F, Index], Topic[F, (NodeId, Index)], Channel[F, (DeferredSink[F, Option[S]], Chunk[A])])
+      (
+        CloseableTopic[F, Index],
+        CloseableTopic[F, (NodeId, Index)],
+        CloseableTopic[F, (DeferredSink[F, Option[S]], Chunk[A])]
+      )
 
-    val make: F[Topics] =
+    val topics: F[Topics] =
       for
-        cidx    <- Topic[F, Index]
-        midx    <- Topic[F, (NodeId, Index)]
-        appends <- Channel.unbounded[F, (DeferredSink[F, Option[S]], Chunk[A])]
+        cidx    <- CloseableTopic[F, Index]
+        midx    <- CloseableTopic[F, (NodeId, Index)]
+        appends <- CloseableTopic[F, (DeferredSink[F, Option[S]], Chunk[A])]
       yield (cidx, midx, appends)
 
-    val topics: Resource[F, Topics] =
-      Resource.make(make): (x, y, z) =>
-        x.close >> y.close >> z.close.void
+    val closeAll: Topics => F[Unit] =
+      (x, y, z) => x.close >> y.close >> z.close.void
 
+    // Closes the topics after a single NodeInfo[S] is produced
+    // Closing the topics interrupts subscribers and makes publishes no-ops
     for
-      (newIdxs, matchIdxs, appends) <-
-        Stream.resource(topics)
+      tps @ (newIdxs, matchIdxs, appends) <-
+        Stream.eval(topics)
 
       initState: S <-
         log.readAll.fold(Monoid[S].empty)(automaton)
@@ -311,32 +292,35 @@ object Leader:
       streams: List[Stream[F, NodeInfo[S]]] =
         handleIncomingAppends :: handleIncomingVotes :: checker :: appenders
 
-      shuttingDown: Deferred[F, Unit] <-
+      closeGate: Deferred[F, NodeInfo[S]] <-
         Stream.eval(F.deferred)
-      
-    yield new:
-      def run: F[NodeInfo[S]] =
+
+      _ <-
         Stream
           .iterable(streams)
           .parJoinUnbounded
           .take(1)
-          .compile
-          .lastOrError
-          .flatTap(_ => shuttingDown.complete_)
+          .evalMap(closeGate.complete)
+          .onFinalize(closeAll(tps))
+          .spawn
+    yield new:
+      def await: F[NodeInfo[S]] =
+        closeGate.get
 
       def write(as: Chunk[A]): F[Option[S]] =
         val wrote: F[Option[S]] =
           for
             deferred <- Deferred[F, Option[S]]
-            _        <- appends.sendOrThrow(deferred, as)
-            s        <- deferred.get
+            s        <- appends.publish(deferred, as).ifM(deferred.get, F.pure(None))
           yield s
 
-        val shutdown: F[Option[S]] =
-          F.race(appends.closed, shuttingDown.get) as None
+        closeGate.tryGet.flatMap:
+          case None =>
+            F.race(closeGate.get, wrote)
+              .map(_.toOption.flatten)
 
-        F.race(wrote, shutdown)
-          .map(_.fold(identity, identity))
+          case Some(_) =>
+            F.pure(None)
 
       def read: F[Option[S]] =
         write(Chunk.empty)
