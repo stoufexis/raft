@@ -25,6 +25,7 @@ object Leader:
 
   case class WaitingClient[F[_]: Monad, S](
     idxStart: Index,
+    idxEnd:   Index,
     sink:     DeferredSink[F, Option[S]]
   )
 
@@ -152,9 +153,11 @@ object Leader:
 
       end send
 
+      // assumes that elements in newIdxs are increasing
       newIdxs
         .subscribe
-        .keepMax
+        .dropping(1)
+        .repeatLast(cfg.heartbeatEvery)
         .evalMapFilterAccumulate(Option.empty[Index])(send(_, _))
 
     end appender
@@ -195,42 +198,37 @@ object Leader:
       appends:  CloseableTopic[F, (DeferredSink[F, Option[S]], Chunk[A])],
       matchIdx: CloseableTopic[F, (NodeId, Index)],
       newIdxs:  CloseableTopic[F, Index],
-      initS:    S
+      initS:    S,
+      initIdx:  Index
     ): Stream[F, Nothing] =
-      val appendsAndHeartbeats: Stream[F, Option[(DeferredSink[F, Option[S]], Chunk[A])]] =
-        appends
-          .subscribe
-          .map(Some(_))
-          .timeoutOnPullTo(cfg.heartbeatEvery, Stream(None))
+      val commitsAndAppends: Stream[F, Either[Index, (DeferredSink[F, Option[S]], Chunk[A])]] =
+        commitIdx(matchIdx).mergeEither(appends.subscribe)
 
-      val commitsAndAppends: Stream[F, Either[Index, Option[(DeferredSink[F, Option[S]], Chunk[A])]]] =
-        commitIdx(matchIdx).mergeEither(appendsAndHeartbeats)
+      val acc: (Option[WaitingClient[F, S]], S) =
+        (None, initS)
 
-      val acc: (Option[WaitingClient[F, S]], Index, S) =
-        (None, Index.init, initS)
+      val startup: Stream[F, Nothing] =
+        Stream.exec(newIdxs.publish(initIdx).void)
 
-      commitsAndAppends.evalScanDrain(acc):
-        case ((Some(client), idx, s), Left(commitIdx)) if idx <= commitIdx =>
+      startup ++ commitsAndAppends.evalScanDrain(acc):
+        case ((Some(client), s), Left(commitIdx)) if client.idxEnd <= commitIdx =>
           for
-            (_, entries) <- log.range(client.idxStart, idx)
+            (_, entries) <- log.range(client.idxStart, client.idxEnd)
             newS         <- F.pure(entries.foldLeft(s)(automaton))
             _            <- client.sink.complete_(Some(newS))
-          yield (None, idx, newS)
+          yield (None, newS)
 
         case (st, Left(_)) =>
           F.pure(st)
 
-        case ((None, _, s), Right(Some((sink, entries)))) =>
+        case ((None, s), Right((sink, entries))) =>
           for
             (start, end) <- log.appendChunk(state.term, entries)
             _            <- newIdxs.publish(end)
-          yield (Some(WaitingClient(start, sink)), end, s)
+          yield (Some(WaitingClient(start, end, sink)), s)
 
-        case (st @ (Some(_), _, _), Right(Some((sink, _)))) =>
+        case (st @ (Some(_), _), Right((sink, _))) =>
           sink.complete(None) as st
-
-        case (st @ (_, idx, _), Right(None)) =>
-          newIdxs.publish(idx) as st
 
     end stateMachine
 
@@ -240,14 +238,15 @@ object Leader:
       appends:   CloseableTopic[F, (DeferredSink[F, Option[S]], Chunk[A])]
     ): Stream[F, NodeInfo[S]] =
       for
-        initState: S <-
-          log.readAll.fold(Monoid[S].empty)(automaton)
+        (initIdx: Index, initState: S) <-
+          log.readAll.fold((Index.init, Monoid[S].empty)):
+            case ((_, s), (index, a)) => (index, automaton(s, a))
 
         checker: Stream[F, NodeInfo[S]] =
           partitionChecker(matchIdxs)
 
         client: Stream[F, Nothing] =
-          stateMachine(appends, matchIdxs, newIdxs, initState)
+          stateMachine(appends, matchIdxs, newIdxs, initState, initIdx)
 
         appenders: List[Stream[F, NodeInfo[S]]] =
           state

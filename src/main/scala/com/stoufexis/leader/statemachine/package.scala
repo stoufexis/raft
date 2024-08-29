@@ -34,26 +34,39 @@ enum ResettableTimeout[A] derives CanEqual:
 
 extension [F[_], A](stream: Stream[F, A])
 
-  /** Backpressures by only keeping the latest element from upstream, if it is larger than the previously
-    * kept element
+  def increasing(using IntLike[A]): Stream[F, A] =
+    stream.filterWithPrevious(_ < _)
+
+  /** Backpressures by only keeping the latest element from upstream
+    *
+    * TODO: test
     */
-  def keepMax(using i: IntLike[A], F: Concurrent[F]): Stream[F, A] =
+  def dropping(buffer: Int)(using F: Concurrent[F]): Stream[F, A] =
     Stream
-      .eval(Ref[F].of(i.zero) product Deferred[F, Unit])
-      .flatMap: (ref, term) =>
+      .eval(Queue.dropping[F, A](buffer) product Deferred[F, Unit])
+      .flatMap: (q, d) =>
         val updater: Stream[F, Nothing] =
           stream
-            .filterWithPrevious(_ < _)
-            .evalMap(ref.set)
-            .onFinalize(term.complete_)
+            .evalMap(q.offer)
+            .onFinalize(d.complete_)
             .drain
 
-        val reader: Stream[F, A] =
-          Stream
-            .repeatEval(ref.get)
-            .interruptWhen(term.get.attempt)
+        Stream
+          .fromQueueUnterminated(q)
+          .concurrently(updater)
+          .interruptWhen(d.get.attempt)
 
-        reader.concurrently(updater)
+  /** If there is no new element within repeatEvery, repeat the previously emitted element.
+    *
+    * TODO: test
+    */
+  def repeatLast(repeatEvery: FiniteDuration)(using F: Temporal[F]): Stream[F, A] =
+    stream
+      .map(Option(_))
+      .timeoutOnPullTo(repeatEvery, Stream(Option.empty[A]))
+      .mapFilterAccumulate(Option.empty[A]):
+        case (last, None) => (last, last)
+        case (last, next) => (next, next)
 
   def discrete(using CanEqual[A, A]): Stream[F, A] =
     stream.filterWithPrevious(_ != _)

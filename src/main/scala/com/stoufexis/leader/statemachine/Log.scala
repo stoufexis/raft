@@ -9,7 +9,7 @@ trait Log[F[_], A]:
 
   def range(from: Index, until: Index): F[(Term, Chunk[A])]
 
-  def readAll: Stream[F, A]
+  def readAll: Stream[F, (Index, A)]
 
   def readRange(from: Index, until: Index): Stream[F, A]
 

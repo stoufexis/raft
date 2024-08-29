@@ -1,8 +1,6 @@
 package com.stoufexis.leader.typeclass
 
 trait IntLike[A]:
-  def zero: A
-
   def add(a: A, i: Int): A
 
   def toInt(a: A): Int
@@ -22,8 +20,6 @@ object IntLike:
     infix def <=(b: A): Boolean = IntLikeOrdering[A].lteq(a, b)
 
   given IntLikeInt: IntLike[Int] with
-    def zero: Int = 0
-
     def add(a: Int, i: Int): Int = a + i
 
     def toInt(a: Int): Int = a
