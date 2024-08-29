@@ -25,7 +25,6 @@ object Leader:
 
   case class WaitingClient[F[_]: Monad, S](
     idxStart: Index,
-    idxEnd:   Index,
     sink:     DeferredSink[F, Option[S]]
   )
 
@@ -153,13 +152,9 @@ object Leader:
 
       end send
 
-      // Immediatelly heartbeat on start
-      val latest: Stream[F, Index] =
-        Stream.eval(log.current)
-
-      latest
-        .append(newIdxs.subscribe.keepMax)
-        .timeoutOnPullTo(cfg.heartbeatEvery, latest)
+      newIdxs
+        .subscribe
+        .keepMax
         .evalMapFilterAccumulate(Option.empty[Index])(send(_, _))
 
     end appender
@@ -187,6 +182,7 @@ object Leader:
 
     end partitionChecker
 
+    // Assumes that matchIdxs for each node always increase
     def commitIdx(matchIdx: CloseableTopic[F, (NodeId, Index)]): Stream[F, Index] =
       matchIdx
         .subscribe
@@ -201,32 +197,40 @@ object Leader:
       newIdxs:  CloseableTopic[F, Index],
       initS:    S
     ): Stream[F, Nothing] =
-      // Assumes that matchIdxs for each node always increase
-      val commitsAndAppends: Stream[F, Either[Index, (DeferredSink[F, Option[S]], Chunk[A])]] =
-        commitIdx(matchIdx).mergeEither(appends.subscribe)
+      val appendsAndHeartbeats: Stream[F, Option[(DeferredSink[F, Option[S]], Chunk[A])]] =
+        appends
+          .subscribe
+          .map(Some(_))
+          .timeoutOnPullTo(cfg.heartbeatEvery, Stream(None))
 
-      val acc: (Option[WaitingClient[F, S]], S) =
-        (None, initS)
+      val commitsAndAppends: Stream[F, Either[Index, Option[(DeferredSink[F, Option[S]], Chunk[A])]]] =
+        commitIdx(matchIdx).mergeEither(appendsAndHeartbeats)
+
+      val acc: (Option[WaitingClient[F, S]], Index, S) =
+        (None, Index.init, initS)
 
       commitsAndAppends.evalScanDrain(acc):
-        case ((Some(client), s), Left(commitIdx)) =>
+        case ((Some(client), idx, s), Left(commitIdx)) if idx <= commitIdx =>
           for
-            (_, entries) <- log.range(client.idxStart, client.idxEnd)
+            (_, entries) <- log.range(client.idxStart, idx)
             newS         <- F.pure(entries.foldLeft(s)(automaton))
             _            <- client.sink.complete_(Some(newS))
-          yield (None, newS)
+          yield (None, idx, newS)
 
-        case (st @ (None, _), Left(_)) =>
+        case (st, Left(_)) =>
           F.pure(st)
 
-        case (st @ (Some(_), _), Right((sink, _))) =>
-          sink.complete(None) as st
-
-        case ((None, s), Right((sink, entries))) =>
+        case ((None, _, s), Right(Some((sink, entries)))) =>
           for
             (start, end) <- log.appendChunk(state.term, entries)
             _            <- newIdxs.publish(end)
-          yield (Some(WaitingClient(start, end, sink)), s)
+          yield (Some(WaitingClient(start, sink)), end, s)
+
+        case (st @ (Some(_), _, _), Right(Some((sink, _)))) =>
+          sink.complete(None) as st
+
+        case (st @ (_, idx, _), Right(None)) =>
+          newIdxs.publish(idx) as st
 
     end stateMachine
 

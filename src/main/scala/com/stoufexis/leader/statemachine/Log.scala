@@ -7,8 +7,6 @@ trait Log[F[_], A]:
   // empty chunk should advance the index. User for linearizable reads
   def appendChunk(term: Term, entry: Chunk[A]): F[(Index, Index)]
 
-  def current: F[Index]
-
   def range(from: Index, until: Index): F[(Term, Chunk[A])]
 
   def readAll: Stream[F, A]
