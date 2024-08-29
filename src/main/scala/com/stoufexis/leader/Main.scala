@@ -14,7 +14,6 @@ import com.stoufexis.leader.proto.protos.*
 
 import scala.annotation.unused
 import scala.concurrent.duration.*
-import com.stoufexis.leader.util.raceFirstOrError
 
 /*
   TODOS For leader

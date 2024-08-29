@@ -106,19 +106,19 @@ object Leader:
       newIdxs:   CloseableTopic[F, Index],
       matchIdxs: CloseableTopic[F, (NodeId, Index)]
     ): Stream[F, NodeInfo[S]] =
-      def send(matchIdx: Index): F[Either[NodeInfo[S], Index]] =
+      def send(matchIdx: Index, newIdx: Index): F[Either[NodeInfo[S], Index]] =
         // Should be called whenever the node successfully responded, even if AppendEntries ultimately failed.
         // It keeps the partitionChecker from timing out.
         // Until we figure out the new matchIdx, re-send the previously valid matchIdx
         def pinged(i: Index = matchIdx): F[Unit] =
           matchIdxs.publish((node, i)).void
 
-        def go(matchIdx: Index, seek: Boolean = false): F[Either[NodeInfo[S], Index]] =
+        def go(matchIdx: Index, newIdx: Index, seek: Boolean = false): F[Either[NodeInfo[S], Index]] =
           val info: F[(Term, Chunk[A])] =
             if seek then
               log.term(matchIdx).map((_, Chunk.empty))
             else
-              log.entriesAfter(matchIdx)
+              log.range(matchIdx, newIdx)
 
           info.flatMap: (matchIdxTerm, entries) =>
             val request: AppendEntries[A] =
@@ -132,16 +132,13 @@ object Leader:
 
             rpc.appendEntries(node, request).flatMap:
               case AppendResponse.Accepted if seek =>
-                pinged() >> go(matchIdx, seek = false)
+                pinged() >> go(matchIdx, newIdx, seek = false)
 
               case AppendResponse.Accepted =>
-                val newMatchIdx: Index =
-                  matchIdx + entries.size
-
-                pinged(newMatchIdx) as Right(newMatchIdx)
+                pinged(newIdx) as Right(newIdx)
 
               case AppendResponse.NotConsistent =>
-                pinged() >> go(matchIdx - 1, seek = true)
+                pinged() >> go(matchIdx - 1, newIdx, seek = true)
 
               case AppendResponse.TermExpired(t) =>
                 pinged() as Left(state.toFollower(t))
@@ -150,7 +147,7 @@ object Leader:
                 F.raiseError(IllegalStateException(msg))
         end go
 
-        go(matchIdx, seek = false)
+        go(matchIdx, newIdx, seek = false)
       end send
 
       val latest: Stream[F, Index] =
@@ -161,10 +158,10 @@ object Leader:
           .timeoutOnPullTo(cfg.heartbeatEvery, latest)
 
       newIdxOrHeartbeat
-        .evalMapFilterAccumulate(Option.empty[Index]): (matchIdx, nextIdx) =>
+        .evalMapFilterAccumulate(Option.empty[Index]): (matchIdx, newIdx) =>
           for
             result: Either[NodeInfo[S], Index] <-
-              send(matchIdx.getOrElse(nextIdx))
+              send(matchIdx.getOrElse(newIdx), newIdx)
 
             newMatchIdx: Option[Index] =
               result.toOption <+> matchIdx
@@ -201,23 +198,10 @@ object Leader:
     def commitIdx(matchIdx: CloseableTopic[F, (NodeId, Index)]): Stream[F, Index] =
       matchIdx
         .subscribe
-        .evalMapFilterAccumulate(Map.empty[NodeId, Index]):
-          case (acc, (node, idx)) =>
-            val nodes: Map[NodeId, Index] =
-              acc.updated(node, idx)
-
-            val cidx: Option[Index] =
-              nodes
-                .filter((n, _) => state.allNodes(n))
-                .toVector
-                .map(_._2)
-                .sorted(using Ordering[Index].reverse)
-                .get(state.allNodes.size / 2)
-
-            logger.debug(s"Commit index is now at $cidx") as (nodes, cidx)
+        .scan(Map.empty[NodeId, Index])(_ + _)
+        .mapFilter(Pure.commitIdxFromMatch(state.otherNodes, _))
         .discrete
-
-    end commitIdx
+        .evalTap(cidx => logger.debug(s"Commit index is now at $cidx"))
 
     def stateMachine(
       appends:  CloseableTopic[F, (DeferredSink[F, Option[S]], Chunk[A])],
@@ -235,9 +219,9 @@ object Leader:
       commitsAndAppends.evalScanDrain(acc):
         case ((Some(client), s), Left(commitIdx)) =>
           for
-            entries <- log.range(client.idxStart, client.idxEnd)
-            newS    <- F.pure(entries.foldLeft(s)(automaton))
-            _       <- client.sink.complete_(Some(newS))
+            (_, entries) <- log.range(client.idxStart, client.idxEnd)
+            newS         <- F.pure(entries.foldLeft(s)(automaton))
+            _            <- client.sink.complete_(Some(newS))
           yield (None, newS)
 
         case (st @ (None, _), Left(_)) =>
