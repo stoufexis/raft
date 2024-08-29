@@ -73,8 +73,9 @@ extension [F[_], A](stream: Stream[F, A])
   def evalScanDrain[S](init: S)(f: (S, A) => F[S]): Stream[F, Nothing] =
     stream.evalScan(init)(f).drain
 
-  def mergeEither[B](that: Stream[F, B]): Stream[F, Either[A, B]] =
-    ???
+  def mergeEither[B](that: Stream[F, B])(using F: Concurrent[F]): Stream[F, Either[A, B]] =
+    stream.map(Left(_)).mergeHaltBoth(that.map(Right(_)))
+
   // TODO: Test
   def resettableTimeoutAccumulate[S, B](
     init:      S,
