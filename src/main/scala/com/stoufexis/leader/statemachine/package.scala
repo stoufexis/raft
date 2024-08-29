@@ -2,12 +2,15 @@ package com.stoufexis.leader.statemachine
 
 import cats.*
 import cats.effect.kernel.*
+import cats.effect.std.Queue
 import cats.implicits.given
 import fs2.*
+import fs2.concurrent.SignallingRef
 import org.typelevel.log4cats.Logger
 
 import com.stoufexis.leader.model.*
 import com.stoufexis.leader.rpc.*
+import com.stoufexis.leader.typeclass.IntLike
 import com.stoufexis.leader.typeclass.IntLike.*
 
 import scala.concurrent.duration.FiniteDuration
@@ -30,6 +33,28 @@ enum ResettableTimeout[A] derives CanEqual:
       case Output(out) => onOutput(out)
 
 extension [F[_], A](stream: Stream[F, A])
+
+  /** Backpressures by only keeping the latest element from upstream, if it is larger than the previously
+    * kept element
+    */
+  def keepMax(using i: IntLike[A], F: Concurrent[F]): Stream[F, A] =
+    Stream
+      .eval(Ref[F].of(i.zero) product Deferred[F, Unit])
+      .flatMap: (ref, term) =>
+        val updater: Stream[F, Nothing] =
+          stream
+            .filterWithPrevious(_ < _)
+            .evalMap(ref.set)
+            .onFinalize(term.complete_)
+            .drain
+
+        val reader: Stream[F, A] =
+          Stream
+            .repeatEval(ref.get)
+            .interruptWhen(term.get.attempt)
+
+        reader.concurrently(updater)
+
   def discrete(using CanEqual[A, A]): Stream[F, A] =
     stream.filterWithPrevious(_ != _)
 

@@ -100,7 +100,6 @@ object Leader:
       * to follower. This makes sure that a partitioned leader will quickly stop acting as a leader, even
       * if it does not notice another leader with a higher term.
       */
-
     def appender(
       node:      NodeId,
       newIdxs:   CloseableTopic[F, Index],
@@ -159,7 +158,7 @@ object Leader:
         Stream.eval(log.current)
 
       latest
-        .append(newIdxs.subscribe)
+        .append(newIdxs.subscribe.keepMax)
         .timeoutOnPullTo(cfg.heartbeatEvery, latest)
         .evalMapFilterAccumulate(Option.empty[Index])(send(_, _))
 
