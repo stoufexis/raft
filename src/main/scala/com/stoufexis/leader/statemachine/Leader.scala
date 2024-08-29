@@ -106,14 +106,16 @@ object Leader:
       newIdxs:   CloseableTopic[F, Index],
       matchIdxs: CloseableTopic[F, (NodeId, Index)]
     ): Stream[F, NodeInfo[S]] =
-      def send(matchIdx: Index, newIdx: Index): F[Either[NodeInfo[S], Index]] =
+      def send(matchIdxO: Option[Index], newIdx: Index): F[(Option[Index], Option[NodeInfo[S]])] =
+        val matchIdx: Index =
+          matchIdxO.getOrElse(newIdx)
         // Should be called whenever the node successfully responded, even if AppendEntries ultimately failed.
         // It keeps the partitionChecker from timing out.
         // Until we figure out the new matchIdx, re-send the previously valid matchIdx
         def pinged(i: Index = matchIdx): F[Unit] =
           matchIdxs.publish((node, i)).void
 
-        def go(matchIdx: Index, newIdx: Index, seek: Boolean = false): F[Either[NodeInfo[S], Index]] =
+        def go(matchIdx: Index, newIdx: Index, seek: Boolean = false): F[Either[Index, NodeInfo[S]]] =
           val info: F[(Term, Chunk[A])] =
             if seek then
               log.term(matchIdx).map((_, Chunk.empty))
@@ -135,40 +137,31 @@ object Leader:
                 pinged() >> go(matchIdx, newIdx, seek = false)
 
               case AppendResponse.Accepted =>
-                pinged(newIdx) as Right(newIdx)
+                pinged(newIdx) as Left(newIdx)
 
               case AppendResponse.NotConsistent =>
                 pinged() >> go(matchIdx - 1, newIdx, seek = true)
 
               case AppendResponse.TermExpired(t) =>
-                pinged() as Left(state.toFollower(t))
+                pinged() as Right(state.toFollower(t))
 
               case AppendResponse.IllegalState(msg) =>
                 F.raiseError(IllegalStateException(msg))
         end go
 
         go(matchIdx, newIdx, seek = false)
+          .map(_.some.separate)
+
       end send
 
+      // Immediatelly heartbeat on start
       val latest: Stream[F, Index] =
         Stream.eval(log.current)
 
-      val newIdxOrHeartbeat: Stream[F, Index] =
-        (latest ++ newIdxs.subscribe)
-          .timeoutOnPullTo(cfg.heartbeatEvery, latest)
-
-      newIdxOrHeartbeat
-        .evalMapFilterAccumulate(Option.empty[Index]): (matchIdx, newIdx) =>
-          for
-            result: Either[NodeInfo[S], Index] <-
-              send(matchIdx.getOrElse(newIdx), newIdx)
-
-            newMatchIdx: Option[Index] =
-              result.toOption <+> matchIdx
-
-            output: Option[NodeInfo[S]] =
-              result.left.toOption
-          yield (newMatchIdx, output)
+      latest
+        .append(newIdxs.subscribe)
+        .timeoutOnPullTo(cfg.heartbeatEvery, latest)
+        .evalMapFilterAccumulate(Option.empty[Index])(send(_, _))
 
     end appender
 
