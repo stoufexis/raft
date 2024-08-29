@@ -3,7 +3,6 @@ package com.stoufexis.leader.statemachine
 import cats.*
 import cats.effect.implicits.given
 import cats.effect.kernel.*
-import cats.effect.kernel.Resource.ExitCase
 import cats.effect.std.Supervisor
 import cats.implicits.given
 import fs2.*
@@ -11,8 +10,7 @@ import org.typelevel.log4cats.Logger
 
 import com.stoufexis.leader.model.*
 import com.stoufexis.leader.rpc.*
-import com.stoufexis.leader.typeclass.IntLike.{*, given}
-import com.stoufexis.leader.util.*
+import com.stoufexis.leader.typeclass.IntLike.*
 
 trait Leader[F[_], A, S]:
   def await: F[Outcome[F, Throwable, NodeInfo[S]]]

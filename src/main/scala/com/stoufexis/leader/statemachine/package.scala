@@ -5,7 +5,6 @@ import cats.effect.kernel.*
 import cats.effect.std.Queue
 import cats.implicits.given
 import fs2.*
-import fs2.concurrent.SignallingRef
 import org.typelevel.log4cats.Logger
 
 import com.stoufexis.leader.model.*
@@ -122,10 +121,6 @@ extension [F[_], A](stream: Stream[F, A])
 
   def mapFilterAccumulate[S, B](init: S)(f: (S, A) => (S, Option[B])): Stream[F, B] =
     stream.mapAccumulate(init)(f).mapFilter(_._2)
-
-  def emitWhenUniqueOutputsReach[B](length: Int, emit: B): Stream[F, B] =
-    stream.mapFilterAccumulate(Set.empty[A]): (acc, next) =>
-      ???
 
 def raceFirst[F[_]: Concurrent, A](streams: Iterable[Stream[F, A]]): Stream[F, A] =
   Stream
