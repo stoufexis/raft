@@ -4,6 +4,7 @@ import cats.effect.kernel.*
 import cats.effect.std.*
 import cats.implicits.given
 import fs2.*
+import fs2.concurrent.Channel
 
 import scala.collection.immutable.SortedMap
 
@@ -13,11 +14,11 @@ import scala.collection.immutable.SortedMap
   * TODO: Test
   */
 trait RequestQueue[F[_], I, O]:
-  def offer(input: I): F[O]
+  def offer(input: I): F[DeferredSource[F, O]]
 
   /** Someone needs to always be consuming, otherwise offer requests will hang forever
     */
-  def consume: Stream[F, (I, Deferred[F, O])]
+  def consume: Stream[F, (I, DeferredSink[F, O])]
 
 object RequestQueue:
   def bounded[F[_], I, O](bound: Int)(using F: Concurrent[F]): Resource[F, RequestQueue[F, I, O]] =
@@ -29,8 +30,8 @@ object RequestQueue:
       inputs: Queue[F, (I, Deferred[F, O])] <-
         Resource.eval(Queue.synchronous)
 
-      outputQueue: Queue[F, Queue[F, (I, Deferred[F, O])]] <-
-        Resource.eval(Queue.synchronous)
+      outputQueue: Queue[F, Channel[F, (I, Deferred[F, O])]] <-
+        Resource.eval(Queue.unbounded)
 
       sup: Supervisor[F] <-
         Supervisor[F](await = false)
@@ -38,16 +39,16 @@ object RequestQueue:
       background: F[Unit] =
         def go(
           waiting: SortedMap[Int, (I, Deferred[F, O])],
-          output:  Queue[F, (I, Deferred[F, O])],
+          output:  Channel[F, (I, Deferred[F, O])],
           idx:     Int
         ): F[Unit] =
-          val inputOutputQueue: F[Either[(I, Deferred[F, O]), Queue[F, (I, Deferred[F, O])]]] =
+          val inputOutputQueue: F[Either[(I, Deferred[F, O]), Channel[F, (I, Deferred[F, O])]]] =
             if waiting.size <= bound then
               F.race(inputs.take, outputQueue.take)
             else // Dont attempt to take from input if bound is reached
               outputQueue.take.map(Right(_))
 
-          val raced: F[Either[Int, Either[(I, Deferred[F, O]), Queue[F, (I, Deferred[F, O])]]]] =
+          val raced: F[Either[Int, Either[(I, Deferred[F, O]), Channel[F, (I, Deferred[F, O])]]]] =
             waiting.headOption match
               case None =>
                 inputOutputQueue.map(Right(_))
@@ -62,23 +63,24 @@ object RequestQueue:
 
             // New input
             case Right(Left(inp)) =>
-              output.offer(inp)
-                >> go(waiting.updated(idx + 1, inp), output, idx + 1)
+              output.send(inp) >> go(waiting.updated(idx + 1, inp), output, idx + 1)
 
             // Consumer change
             case Right(Right(newOutput)) =>
-              waiting.values.toList.traverse(newOutput.offer)
-                >> go(waiting, newOutput, idx)
+              waiting.traverse_(newOutput.send) >> go(waiting, newOutput, idx)
 
         outputQueue.take.flatMap(go(SortedMap.empty, _, 0))
 
       _ <-
         Resource.eval(sup.supervise(background))
     yield new RequestQueue[F, I, O]:
-      def offer(input: I): F[O] =
-        F.deferred[O].flatMap: d =>
-          inputs.offer(input, d) >> d.get
+      def offer(input: I): F[DeferredSource[F, O]] =
+        F.deferred[O]
+          .flatTap(inputs.offer(input, _))
+          .widen
 
-      def consume: Stream[F, (I, Deferred[F, O])] =
-        Stream.eval(Queue.unbounded[F, (I, Deferred[F, O])]).flatMap: q =>
-          Stream.eval(outputQueue.offer(q)) >> Stream.fromQueueUnterminated(q)
+      def consume: Stream[F, (I, DeferredSink[F, O])] =
+        Stream
+          .eval(Channel.unbounded[F, (I, Deferred[F, O])])
+          .flatMap: c =>
+            (Stream.eval(outputQueue.offer(c)) >> c.stream).onFinalize(c.close.void)
