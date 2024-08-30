@@ -42,10 +42,10 @@ object RequestQueue:
           .flatMap((_, newTokens) => Stream.iterable(newTokens.toList).evalMapFilter(map(_).get))
 
       def set(token: Token, input: I, deferred: Deferred[F, O]): F[Unit] =
-        map(token).set(Some(input, deferred))
+        map(token).set(Some(input, deferred)) >> tokens.update(_ + token)
 
       def unset(token: Token): F[Unit] =
-        map(token).set(None)
+        map(token).set(None) >> tokens.update(_ - token)
 
       def offer(input: I): F[O] = sem.permit.surround:
         for
