@@ -62,9 +62,10 @@ object Leader:
         case IncomingAppend(req, sink) if state.isCurrent(req.term) =>
           req.duplicateLeaders(sink)
 
-        // newer leader detected
+        // newer leader detected, dont respond to the request,
+        // let it be consumed when we have transitioned to follower
         case IncomingAppend(req, sink) =>
-          req.accepted(sink) as Some(state.transition(Role.Follower, req.term))
+          F.pure(Some(state.transition(Role.Follower, req.term)))
 
     val handleIncomingVotes: Stream[F, NodeInfo[S]] =
       rpc.incomingVotes.evalMapFilter:
@@ -75,6 +76,8 @@ object Leader:
           req.reject(sink) as None
 
         // new election detected
+        // TODO: make sure that the take(1) at the bottom makes sure that 2 IncomingVotes
+        // cannot reach this case in quick succession before transitioning
         case IncomingVote(req, sink) =>
           req.grant(sink) as Some(state.transition(Role.VotedFollower, req.term))
 
@@ -175,6 +178,7 @@ object Leader:
           val debug: F[Unit] =
             logger.debug(s"Received response from $node")
 
+          // TODO: Unify the cluster majority related functions
           if state.isMajority(newNodes) then
             info as (Set(state.currentNode), ResettableTimeout.Reset())
           else
@@ -187,6 +191,7 @@ object Leader:
       matchIdx
         .subscribeUnbounded
         .scan(Map.empty[NodeId, Index])(_ + _)
+        // TODO: Unify the cluster majority related functions
         .mapFilter(Pure.commitIdxFromMatch(state.otherNodes, _))
         .discrete
         .evalTap(cidx => logger.debug(s"Commit index is now at $cidx"))
@@ -258,8 +263,9 @@ object Leader:
 
         out: NodeInfo[S] <-
           Stream
-            .iterable(streams)
+            .iterable(streams.map(_.take(1)))
             .parJoinUnbounded
+            .take(1)
       yield out
 
     // Closes the topics after a single NodeInfo[S] is produced
@@ -273,7 +279,7 @@ object Leader:
         Stream.resource(CloseableTopic[F, (NodeId, Index)])
 
       run: NodeInfo[S] <-
-        streams(cidx, midx).take(1)
+        streams(cidx, midx)
     yield run
 
   end apply
