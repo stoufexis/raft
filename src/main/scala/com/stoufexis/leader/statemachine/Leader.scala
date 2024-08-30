@@ -154,6 +154,7 @@ object Leader:
       end send
 
       // assumes that elements in newIdxs are increasing
+      // TODO: Make sure that if a NodeInfo is emitted no new sends can be made no matter how fast you pull
       newIdxs
         .subscribeUnbounded
         .dropping(1)
@@ -226,11 +227,8 @@ object Leader:
           F.pure(st)
 
         case ((None, idxEnd, s), Right(req)) =>
-          log
-            .appendChunk(state.term, idxEnd, req.entries)
-            .flatMap:
-              case None         => F.raiseError(IllegalStateException("Multiple log writers"))
-              case Some(newEnd) => F.pure(Some(WaitingClient(idxEnd, req.sink)), newEnd, s)
+          log.appendChunk(state.term, idxEnd, req.entries).map: newEnd =>
+            (Some(WaitingClient(idxEnd, req.sink)), newEnd, s)
 
         case (st, Right(req)) =>
           req.sink.complete(None) as st
