@@ -12,12 +12,12 @@ import com.stoufexis.leader.model.*
 import com.stoufexis.leader.rpc.*
 import com.stoufexis.leader.typeclass.IntLike.*
 
-trait Leader[F[_], A, S]:
-  def await: F[Outcome[F, Throwable, NodeInfo[S]]]
+// trait Leader[F[_], A, S]:
+//   def await: F[Outcome[F, Throwable, NodeInfo[S]]]
 
-  def write(a: Chunk[A]): F[Option[S]]
+//   def write(a: Chunk[A]): F[Option[S]]
 
-  def read: F[Option[S]]
+//   def read: F[Option[S]]
 
 object Leader:
 
@@ -49,10 +49,10 @@ object Leader:
   def apply[F[_], A, S: Monoid](
     state:     NodeInfo[S],
     log:       Log[F, A],
-    rpc:       RPC[F, A],
+    rpc:       RPC[F, A, S],
     cfg:       Config,
     automaton: (S, A) => S
-  )(using F: Temporal[F], logger: Logger[F]): Resource[F, Leader[F, A, S]] =
+  )(using F: Temporal[F], logger: Logger[F]): Stream[F, NodeInfo[S]] =
 
     val handleIncomingAppends: Stream[F, NodeInfo[S]] =
       rpc.incomingAppends.evalMapFilter:
@@ -191,21 +191,23 @@ object Leader:
         .discrete
         .evalTap(cidx => logger.debug(s"Commit index is now at $cidx"))
 
+    // Only one client is allowed to wait at a time
+    // this is probably too strict, but can be easily extended
+    // TODO: Extend
     def stateMachine(
-      appends:  CloseableTopic[F, (DeferredSink[F, Option[S]], Chunk[A])],
       matchIdx: CloseableTopic[F, (NodeId, Index)],
       newIdxs:  CloseableTopic[F, Index],
       initS:    S,
       initIdx:  Index
     ): Stream[F, Nothing] =
-      val commitsAndAppends: Stream[F, Either[Index, (DeferredSink[F, Option[S]], Chunk[A])]] =
-        commitIdx(matchIdx).mergeEither(appends.subscribe)
-
-      val acc: (Option[WaitingClient[F, S]], Index, S) =
-        (None, initIdx, initS)
+      val commitsAndAppends: Stream[F, Either[Index, IncomingClientRequest[F, A, S]]] =
+        commitIdx(matchIdx).mergeEither(rpc.incomingClientRequests)
 
       val startup: Stream[F, Nothing] =
         Stream.exec(newIdxs.publish(initIdx).void)
+
+      val acc: (Option[WaitingClient[F, S]], Index, S) =
+        (None, initIdx, initS)
 
       startup ++ commitsAndAppends.evalScanDrain(acc):
         case ((Some(client), idxEnd, s), Left(commitIdx)) if idxEnd <= commitIdx =>
@@ -218,22 +220,21 @@ object Leader:
         case (st, Left(_)) =>
           F.pure(st)
 
-        case ((None, idxEnd, s), Right((sink, entries))) =>
+        case ((None, idxEnd, s), Right(req)) =>
           log
-            .appendChunk(state.term, idxEnd, entries)
+            .appendChunk(state.term, idxEnd, req.entries)
             .flatMap:
               case None         => F.raiseError(IllegalStateException("Multiple log writers"))
-              case Some(newEnd) => F.pure(Some(WaitingClient(idxEnd, sink)), newEnd, s)
+              case Some(newEnd) => F.pure(Some(WaitingClient(idxEnd, req.sink)), newEnd, s)
 
-        case (st, Right((sink, _))) =>
-          sink.complete(None) as st
+        case (st, Right(req)) =>
+          req.sink.complete(None) as st
 
     end stateMachine
 
     def streams(
       newIdxs:   CloseableTopic[F, Index],
       matchIdxs: CloseableTopic[F, (NodeId, Index)],
-      appends:   CloseableTopic[F, (DeferredSink[F, Option[S]], Chunk[A])]
     ): Stream[F, NodeInfo[S]] =
       for
         (initIdx: Index, initState: S) <-
@@ -244,7 +245,7 @@ object Leader:
           partitionChecker(matchIdxs)
 
         client: Stream[F, Nothing] =
-          stateMachine(appends, matchIdxs, newIdxs, initState, initIdx)
+          stateMachine(matchIdxs, newIdxs, initState, initIdx)
 
         appenders: List[Stream[F, NodeInfo[S]]] =
           state
@@ -265,45 +266,15 @@ object Leader:
     // Closing the topics interrupts subscribers and makes publishes no-ops
     // Any further writes or reads will return None
     for
-      sup: Supervisor[F] <-
-        Supervisor[F](await = false)
-
       cidx: CloseableTopic[F, Index] <-
-        Resource.eval(CloseableTopic[F, Index])
+        Stream.eval(CloseableTopic[F, Index])
 
       midx: CloseableTopic[F, (NodeId, Index)] <-
-        Resource.eval(CloseableTopic[F, (NodeId, Index)])
+        Stream.eval(CloseableTopic[F, (NodeId, Index)])
 
-      appends: CloseableTopic[F, (DeferredSink[F, Option[S]], Chunk[A])] <-
-        Resource.eval(CloseableTopic[F, (DeferredSink[F, Option[S]], Chunk[A])])
-
-      run: F[NodeInfo[S]] =
-        streams(cidx, midx, appends)
+      run: NodeInfo[S] <-
+        streams(cidx, midx)
           .take(1)
-          .compile
-          .lastOrError
-
-      f: Fiber[F, Throwable, NodeInfo[S]] <-
-        Resource.eval(sup.supervise(run))
-
-      _ <-
-        Resource.onFinalize(cidx.close >> midx.close >> appends.close.void)
-    yield new Leader[F, A, S]:
-      def await: F[Outcome[F, Throwable, NodeInfo[S]]] =
-        f.join
-
-      // Gets cancelled if streams terminate
-      def writeFull(as: Chunk[A]): F[Either[Outcome[F, Throwable, NodeInfo[S]], Option[S]]] =
-        f.join.race:
-          for
-            deferred <- Deferred[F, Option[S]]
-            s        <- appends.publish(deferred, as).ifM(deferred.get, F.pure(None))
-          yield s
-
-      def write(as: Chunk[A]): F[Option[S]] =
-        writeFull(as).map(_.toOption.flatten)
-
-      def read: F[Option[S]] =
-        write(Chunk.empty)
-
+          .onFinalize(cidx.close >> midx.close.void)
+    yield run
   end apply
