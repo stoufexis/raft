@@ -152,7 +152,7 @@ object Leader:
 
       // assumes that elements in newIdxs are increasing
       newIdxs
-        .subscribe
+        .subscribeUnbounded
         .dropping(1)
         .repeatLast(cfg.heartbeatEvery)
         .evalMapFilterAccumulate(Option.empty[Index])(send(_, _))
@@ -160,7 +160,7 @@ object Leader:
     end appender
 
     def partitionChecker(matchIdxs: CloseableTopic[F, (NodeId, Index)]): Stream[F, NodeInfo[S]] =
-      matchIdxs.subscribe.resettableTimeoutAccumulate(
+      matchIdxs.subscribeUnbounded.resettableTimeoutAccumulate(
         init      = Set(state.currentNode),
         timeout   = cfg.staleAfter,
         onTimeout = F.pure(state.toFollower)
@@ -185,7 +185,7 @@ object Leader:
     // Assumes that matchIdxs for each node always increase
     def commitIdx(matchIdx: CloseableTopic[F, (NodeId, Index)]): Stream[F, Index] =
       matchIdx
-        .subscribe
+        .subscribeUnbounded
         .scan(Map.empty[NodeId, Index])(_ + _)
         .mapFilter(Pure.commitIdxFromMatch(state.otherNodes, _))
         .discrete
@@ -234,7 +234,7 @@ object Leader:
 
     def streams(
       newIdxs:   CloseableTopic[F, Index],
-      matchIdxs: CloseableTopic[F, (NodeId, Index)],
+      matchIdxs: CloseableTopic[F, (NodeId, Index)]
     ): Stream[F, NodeInfo[S]] =
       for
         (initIdx: Index, initState: S) <-
@@ -267,14 +267,13 @@ object Leader:
     // Any further writes or reads will return None
     for
       cidx: CloseableTopic[F, Index] <-
-        Stream.eval(CloseableTopic[F, Index])
+        Stream.resource(CloseableTopic[F, Index])
 
       midx: CloseableTopic[F, (NodeId, Index)] <-
-        Stream.eval(CloseableTopic[F, (NodeId, Index)])
+        Stream.resource(CloseableTopic[F, (NodeId, Index)])
 
       run: NodeInfo[S] <-
-        streams(cidx, midx)
-          .take(1)
-          .onFinalize(cidx.close >> midx.close.void)
+        streams(cidx, midx).take(1)
     yield run
+
   end apply
