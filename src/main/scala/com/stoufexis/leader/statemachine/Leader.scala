@@ -23,7 +23,6 @@ object Leader:
 
   case class WaitingClient[F[_]: Monad, S](
     idxStart: Index,
-    idxEnd:   Index,
     sink:     DeferredSink[F, Option[S]]
   )
 
@@ -202,30 +201,31 @@ object Leader:
       val commitsAndAppends: Stream[F, Either[Index, (DeferredSink[F, Option[S]], Chunk[A])]] =
         commitIdx(matchIdx).mergeEither(appends.subscribe)
 
-      val acc: (Option[WaitingClient[F, S]], S) =
-        (None, initS)
+      val acc: (Option[WaitingClient[F, S]], Index, S) =
+        (None, initIdx, initS)
 
       val startup: Stream[F, Nothing] =
         Stream.exec(newIdxs.publish(initIdx).void)
 
       startup ++ commitsAndAppends.evalScanDrain(acc):
-        case ((Some(client), s), Left(commitIdx)) if client.idxEnd <= commitIdx =>
+        case ((Some(client), idxEnd, s), Left(commitIdx)) if idxEnd <= commitIdx =>
           for
-            (_, entries) <- log.range(client.idxStart, client.idxEnd)
+            (_, entries) <- log.range(client.idxStart, idxEnd)
             newS         <- F.pure(entries.foldLeft(s)(automaton))
             _            <- client.sink.complete_(Some(newS))
-          yield (None, newS)
+          yield (None, idxEnd, newS)
 
         case (st, Left(_)) =>
           F.pure(st)
 
-        case ((None, s), Right((sink, entries))) =>
-          for
-            (start, end) <- log.appendChunk(state.term, entries)
-            _            <- newIdxs.publish(end)
-          yield (Some(WaitingClient(start, end, sink)), s)
+        case ((None, idxEnd, s), Right((sink, entries))) =>
+          log
+            .appendChunk(state.term, idxEnd, entries)
+            .flatMap:
+              case None         => F.raiseError(IllegalStateException("Multiple log writers"))
+              case Some(newEnd) => F.pure(Some(WaitingClient(idxEnd, sink)), newEnd, s)
 
-        case (st @ (Some(_), _), Right((sink, _))) =>
+        case (st, Right((sink, _))) =>
           sink.complete(None) as st
 
     end stateMachine
