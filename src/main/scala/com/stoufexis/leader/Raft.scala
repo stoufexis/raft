@@ -14,7 +14,6 @@ import com.stoufexis.leader.model.*
 import com.stoufexis.leader.rpc.*
 import com.stoufexis.leader.service.*
 import com.stoufexis.leader.typeclass.IntLike.*
-import com.stoufexis.leader.util.*
 
 import scala.concurrent.duration.FiniteDuration
 

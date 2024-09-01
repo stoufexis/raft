@@ -14,6 +14,8 @@ import com.stoufexis.leader.proto.protos.*
 
 import scala.annotation.unused
 import scala.concurrent.duration.*
+import cats.effect.std.Semaphore
+import scala.collection.mutable.ArrayBuilder
 
 /*
   TODOS For leader
@@ -112,16 +114,10 @@ import scala.concurrent.duration.*
 //   def run: IO[Unit] = client
 
 object Main extends IOApp.Simple:
-  val streams =
-    Stream(
-      Stream.awakeDelay[IO](100.millis).evalTap(d => IO.println(d)).onFinalizeCase(IO.println),
-      Stream.awakeDelay[IO](5.second).evalTap(d => IO.println(d)).onFinalizeCase(IO.println),
-      Stream.awakeDelay[IO](10.second).evalTap(d => IO.println(d)).onFinalizeCase(IO.println)
-    )
+  val arr: ArrayBuilder[Int] = ArrayBuilder.make
+  (10 to 30).foreach(arr.addOne(_))
 
   def run =
     for
-      f <- streams.parJoinUnbounded.take(1).compile.lastOrError.flatMap(d => IO.println("Done "+d)).start
-      _ <- IO.readLine
-      _ <- f.cancel
+      _ <- IO.println(arr.result().toList)
     yield ()

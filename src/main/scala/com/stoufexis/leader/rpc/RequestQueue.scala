@@ -2,16 +2,13 @@ package com.stoufexis.leader.rpc
 
 import cats.effect.implicits.given
 import cats.effect.kernel.*
-import cats.effect.kernel.Unique.Token
 import cats.effect.std.*
-import cats.effect.std.PQueue
 import cats.implicits.given
 import fs2.*
-import fs2.concurrent.Channel
-import fs2.concurrent.SignallingMapRef
-import fs2.concurrent.SignallingRef
+import fs2.concurrent.*
 
-import scala.collection.immutable.SortedMap
+import scala.collection.mutable.ArrayBuilder
+import scala.reflect.ClassTag
 
 /** A request is committed, and thus dequeued, only if a response is produced. Any later consumers will
   * see the same request. Used to implement RPC.
@@ -26,127 +23,90 @@ trait RequestQueue[F[_], I, O]:
   def consume: Stream[F, (I, DeferredSink[F, O])]
 
 object RequestQueue:
-  class Uncommitted[F[_], A](
-    uncommitted: Dequeue[F, (Int, A)],
-    idxs:        SignallingRef[F, (Int, Int)],
-    concurrency: Int,
-    semaphore:   Semaphore[F],
-    bound:       Int
-  )(using F: Concurrent[F]):
-    // TODO handle idx overflows
-    def tryOffer(a: A): F[Boolean] = semaphore.permit.surround:
-      def shift(i: Int): F[Unit] =
-        uncommitted
-          .offerBack(i, a)
-          .guarantee(uncommitted.takeFront.void)
-
-      idxs.flatModify:
-        case (cidx, ucidx) if ucidx - cidx <= bound => (cidx, ucidx + 1) -> shift(ucidx + 1).as(true)
-        case (cidx, ucidx)                          => (cidx, ucidx) -> F.pure(false)
-
-    def waitUntilCanOffer: F[Unit] =
-      idxs.waitUntil((cidx, ucidx) => ucidx - cidx <= bound)
-
-    def commit(token: Int): F[Boolean] = semaphore.permit.surround:
-      idxs.modify:
-        case (cidx, ucidx) if cidx < token => ((token, ucidx), true)
-        case (cidx, ucidx)                 => ((cidx, ucidx), false)
-
-    // Stops any committing and offerring, dequeues all elements (to pass them downstream) then requeues them
-    // this function will be called only when a consumer is changing, which should happen infrequently
-    // thus, this is inefficient because this utility is optimised for tryOffer and commit
-    def readUncommitted(exec: F[Unit]): F[Chunk[A]] =
-      val permits: Resource[F, Unit] =
-        Resource.make(semaphore.acquireN(concurrency))(_ => semaphore.releaseN(concurrency))
-
-      permits.surround:
-        F.uncancelable: poll =>
-          for 
-            all <- poll(uncommitted.tryTakeFrontN(None))
-            _   <- poll(exec)
-            _   <- all.traverse_(uncommitted.offer)
-          yield Chunk.iterable(all.map(_._2))
-
-
-  def apply[F[_], I, O](bound: Int)(using F: Concurrent[F]): Stream[F, RequestQueue[F, I, O]] =
+  def apply[F[_], I, O](bound: Int)(using F: Concurrent[F]): F[RequestQueue[F, I, O]] =
     for
-      chan: Channel[F, (I, DeferredSink[F, O])] <-
-        Stream.eval(Channel.unbounded)
-
-      waiting: Uncommitted[F, (I, DeferredSink[F, O])] =
-        ???
-    yield new RequestQueue[F, I, O]:
-      def offer(input: I): F[O] = ???
-      // for
-      //   deferred <- F.deferred[O]
-      //   token    <- waiting.offer(input, deferred)
-      //   o        <- deferred.get.guarantee(waiting.commit(token).void)
-      // yield o
+      unprocessed <- Unprocessed[F, (I, DeferredSink[F, O])](bound)
+    yield new:
+      def offer(input: I): F[O] = F.uncancelable: poll =>
+        for
+          d <- F.deferred[O]
+          i <- poll(unprocessed.offer(input, d))
+          o <- poll(d.get).guarantee(unprocessed.drop(i))
+        yield o
 
       def consume: Stream[F, (I, DeferredSink[F, O])] =
-        ???
-        // Stream.evalUnChunk(waiting.readUncommitted) ++ chan.stream
+        unprocessed.read
 
-  // def bounded[F[_], I, O](bound: Int)(using F: Concurrent[F]): Resource[F, RequestQueue[F, I, O]] =
+  // TODO: test cancellations and stuff
+  class Unprocessed[F[_], A](
+    ref:   SignallingRef[F, State[A]],
+    waits: Queue[F, Deferred[F, Unit]],
+    bound: Int
+  )(using F: Concurrent[F]):
 
-  //   def raceMap(head: (Int, (I, Deferred[F, O])), map: Map[Int, (I, Deferred[F, O])]): F[Int] =
-  //     ???
+    def wakeupNext: F[Unit] =
+      waits.tryTake.flatMap:
+        case None       => F.unit
+        case Some(head) => head.complete(()).ifM(F.unit, wakeupNext)
 
-  //   for
-  //     inputs: Queue[F, (I, Deferred[F, O])] <-
-  //       Resource.eval(Queue.synchronous)
+    // TODO handle idx overflows
+    def tryOffer(a: A): F[Option[Int]] =
+      ref.modify:
+        case state if state.unprocessedSize >= bound =>
+          (state, None)
+        case state =>
+          state.addUnprocessed(a).fmap(Some(_))
 
-  //     outputQueue: Queue[F, Channel[F, (I, Deferred[F, O])]] <-
-  //       Resource.eval(Queue.unbounded)
+    def offer(a: A): F[Int] =
+      def waitAndReoffer: F[Int] =
+        F.deferred[Unit].flatMap: d =>
+          val waitAndRetry: F[Int] =
+            waits.offer(d) >> d.get >> offer(a)
 
-  //     sup: Supervisor[F] <-
-  //       Supervisor[F](await = false)
+          waitAndRetry.guarantee(d.complete(()).void)
 
-  //     background: F[Unit] =
-  //       def go(
-  //         waiting: SortedMap[Int, (I, Deferred[F, O])],
-  //         output:  Channel[F, (I, Deferred[F, O])],
-  //         idx:     Int
-  //       ): F[Unit] =
-  //         val inputOutputQueue: F[Either[(I, Deferred[F, O]), Channel[F, (I, Deferred[F, O])]]] =
-  //           if waiting.size <= bound then
-  //             F.race(inputs.take, outputQueue.take)
-  //           else // Dont attempt to take from input if bound is reached
-  //             outputQueue.take.map(Right(_))
+      tryOffer(a).flatMap:
+        case None      => waitAndReoffer
+        case Some(idx) => F.pure(idx)
 
-  //         val raced: F[Either[Int, Either[(I, Deferred[F, O]), Channel[F, (I, Deferred[F, O])]]]] =
-  //           waiting.headOption match
-  //             case None =>
-  //               inputOutputQueue.map(Right(_))
+    def drop(idx: Int): F[Unit] =
+      F.uncancelable: poll =>
+        poll(ref.update(_.dropUnprocessed(idx))) >> wakeupNext
 
-  //             case Some(head) =>
-  //               F.race(raceMap(head, waiting.tail), inputOutputQueue)
+    // TODO: test
+    def read(using ClassTag[A]): Stream[F, A] =
+      ref
+        .discrete
+        .filterWithPrevious(_.idx != _.idx)
+        .mapAccumulate(0): (lastEmitted, state) =>
+          (state.idx, Stream.chunk(state.elemsBetween(lastEmitted, state.idx)))
+        .flatMap(_._2)
 
-  //         raced.flatMap:
-  //           // A deferred completed
-  //           case Left(i) =>
-  //             go(waiting.removed(i), output, idx)
+  object Unprocessed:
+    def apply[F[_]: Concurrent, A](bound: Int): F[Unprocessed[F, A]] =
+      for
+        ref   <- SignallingRef[F].of[State[A]](State.empty)
+        waits <- Queue.unbounded[F, Deferred[F, Unit]]
+      yield new Unprocessed(ref, waits, bound)
 
-  //           // New input
-  //           case Right(Left(inp)) =>
-  //             output.send(inp) >> go(waiting.updated(idx + 1, inp), output, idx + 1)
+  case class State[A](idx: Int, elems: Map[Int, A]):
+    def unprocessedSize: Int =
+      elems.size
 
-  //           // Consumer change
-  //           case Right(Right(newOutput)) =>
-  //             waiting.traverse_(newOutput.send) >> go(waiting, newOutput, idx)
+    def addUnprocessed(a: A): (State[A], Int) =
+      val i2 = idx + 1
+      copy(idx = i2, elems = elems.updated(i2, a)) -> i2
 
-  //       outputQueue.take.flatMap(go(SortedMap.empty, _, 0))
+    def dropUnprocessed(idx: Int): State[A] =
+      copy(elems = elems.removed(idx))
 
-  //     _ <-
-  //       Resource.eval(sup.supervise(background))
-  //   yield new RequestQueue[F, I, O]:
-  //     def offer(input: I): F[DeferredSource[F, O]] =
-  //       F.deferred[O]
-  //         .flatTap(inputs.offer(input, _))
-  //         .widen
+    // def addWaiting(waiting: Deferred[F, Unit]): State[F, A] =
+    //   copy(waits = waits.enqueue(waiting))
 
-  //     def consume: Stream[F, (I, DeferredSink[F, O])] =
-  //       Stream
-  //         .eval(Channel.unbounded[F, (I, Deferred[F, O])])
-  //         .flatMap: c =>
-  //           (Stream.eval(outputQueue.offer(c)) >> c.stream).onFinalize(c.close.void)
+    def elemsBetween(start: Int, end: Int)(using ClassTag[A]): Chunk[A] =
+      val arr: ArrayBuilder[A] = ArrayBuilder.make
+      (start to end).foreach(elems.get(_).foreach(arr.addOne))
+      Chunk.array(arr.result())
+
+  object State:
+    def empty[A]: State[A] = State(0, Map.empty)
