@@ -1,9 +1,7 @@
 package com.stoufexis.leader.statemachine
 
 import cats.*
-import cats.effect.implicits.given
 import cats.effect.kernel.*
-import cats.effect.std.Supervisor
 import cats.implicits.given
 import fs2.*
 import org.typelevel.log4cats.Logger
@@ -62,8 +60,12 @@ object Leader:
         case IncomingAppend(req, sink) if state.isCurrent(req.term) =>
           req.duplicateLeaders(sink)
 
-        // newer leader detected, dont respond to the request,
-        // let it be consumed when we have transitioned to follower
+        /** newer leader detected. Dont respond to the request, let it be consumed when we have
+          * transitioned to follower this ensures that the response happens only after this transition
+          * has taken place. Otherwise, there is a chance that a different transition will happen
+          * instead. This is a race condition caused by the parJoin of potentially transition-producing
+          * streams.
+          */
         case IncomingAppend(req, sink) =>
           F.pure(Some(state.transition(Role.Follower, req.term)))
 
@@ -75,11 +77,11 @@ object Leader:
         case IncomingVote(req, sink) if state.isCurrent(req.term) =>
           req.reject(sink) as None
 
-        // new election detected
-        // TODO: make sure that the take(1) at the bottom makes sure that 2 IncomingVotes
-        // cannot reach this case in quick succession before transitioning
+        /** This leader is being superseeded. As with the handle appends transition, want until the
+          * transition has happened to grant.
+          */
         case IncomingVote(req, sink) =>
-          req.grant(sink) as Some(state.transition(Role.VotedFollower, req.term))
+          F.pure(Some(state.transition(Role.VotedFollower(req.candidateId), req.term)))
 
     /** Maintains a matchIndex for each node, which points to the last index in the log for which every
       * preceeding entry matches, including the matchIndex entry.

@@ -79,8 +79,8 @@ object RequestQueue:
         .discrete
         .filterWithPrevious(_.idx != _.idx)
         .mapAccumulate(0): (lastEmitted, state) =>
-          (state.idx, Stream.chunk(state.elemsBetween(lastEmitted, state.idx)))
-        .flatMap(_._2)
+          (state.idx, state.elemsBetween(lastEmitted, state.idx))
+        .flatMap((_, c) => Stream.chunk(c))
 
   object Unprocessed:
     def apply[F[_]: Concurrent, A](bound: Int): F[Unprocessed[F, A]] =
