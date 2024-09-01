@@ -61,7 +61,7 @@ object RequestQueue:
       def waitAndReoffer: F[Int] =
         F.deferred[Unit].flatMap: d =>
           val waitAndRetry: F[Int] =
-            waits.offer(d) >> d.get >> offer(a)
+            waits.offer(d) >> d.get >> offer(a).onCancel(wakeupNext)
 
           waitAndRetry.guarantee(d.complete(()).void)
 
