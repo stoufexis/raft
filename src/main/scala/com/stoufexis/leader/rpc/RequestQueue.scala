@@ -77,9 +77,9 @@ object RequestQueue:
     def read(using ClassTag[A]): Stream[F, A] =
       ref
         .discrete
-        .filterWithPrevious(_.idx != _.idx)
+        .filterWithPrevious(_.idx < _.idx)
         .mapAccumulate(0): (lastEmitted, state) =>
-          (state.idx, state.elemsBetween(lastEmitted, state.idx))
+          (state.idx, state.elemsBetween(lastEmitted + 1, state.idx))
         .flatMap((_, c) => Stream.chunk(c))
 
   object Unprocessed:
