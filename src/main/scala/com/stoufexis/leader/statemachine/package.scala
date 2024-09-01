@@ -36,7 +36,7 @@ extension [F[_], A](stream: Stream[F, A])
   def increasing(using IntLike[A]): Stream[F, A] =
     stream.filterWithPrevious(_ < _)
 
-  /** Backpressures by only keeping the latest element from upstream
+  /** Backpressures by dropping old elements from upstream
     *
     * TODO: test
     */
@@ -66,9 +66,6 @@ extension [F[_], A](stream: Stream[F, A])
       .mapFilterAccumulate(Option.empty[A]):
         case (last, None) => (last, last)
         case (last, next) => (next, next)
-
-  def discrete(using CanEqual[A, A]): Stream[F, A] =
-    stream.filterWithPrevious(_ != _)
 
   def evalScanDrain[S](init: S)(f: (S, A) => F[S]): Stream[F, Nothing] =
     stream.evalScan(init)(f).drain

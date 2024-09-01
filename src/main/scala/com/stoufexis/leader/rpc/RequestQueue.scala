@@ -100,9 +100,6 @@ object RequestQueue:
     def dropUnprocessed(idx: Int): State[A] =
       copy(elems = elems.removed(idx))
 
-    // def addWaiting(waiting: Deferred[F, Unit]): State[F, A] =
-    //   copy(waits = waits.enqueue(waiting))
-
     def elemsBetween(start: Int, end: Int)(using ClassTag[A]): Chunk[A] =
       val arr: ArrayBuilder[A] = ArrayBuilder.make
       (start to end).foreach(elems.get(_).foreach(arr.addOne))

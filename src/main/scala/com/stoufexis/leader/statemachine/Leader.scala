@@ -196,7 +196,7 @@ object Leader:
         .scan(Map.empty[NodeId, Index])(_ + _)
         // TODO: Unify the cluster majority related functions
         .mapFilter(Pure.commitIdxFromMatch(state.otherNodes, _))
-        .discrete
+        .dropping(1)
         .evalTap(cidx => logger.debug(s"Commit index is now at $cidx"))
 
     // Only one client is allowed to wait at a time
