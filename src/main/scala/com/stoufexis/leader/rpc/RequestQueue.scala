@@ -65,8 +65,7 @@ object RequestQueue:
     ref:   SignallingRef[F, State[F, A]],
     bound: Int
   )(using F: Concurrent[F]):
-    // TODO handle idx overflows
-    def tryOffer(a: A): F[Option[Int]] =
+    def tryOffer(a: A): F[Option[Long]] =
       ref.modify:
         case state if state.elems.size >= bound =>
           (state, None)
@@ -74,7 +73,7 @@ object RequestQueue:
           val i2 = state.idx + 1
           state.copy(idx = i2, elems = state.elems.updated(i2, a)) -> Some(i2)
 
-    def offer(a: A): F[Int] =
+    def offer(a: A): F[Long] =
       F.deferred[Unit].flatMap: offerrer =>
         val cleanup: F[Unit] = ref.flatModify: state =>
           val (ours, others) =
@@ -97,12 +96,16 @@ object RequestQueue:
           case state if state.elems.size >= bound =>
             state.copy(offerrers = state.offerrers.enqueue(offerrer))
               -> (offerrer.get >> offer(a)).onCancel(cleanup)
+
+          // Assuming 100000 requests a second, which is rediculous,
+          // this will overflow at just under 3000000 years, if there is no reset
+          // Nothing to be done about overflows...
           case state =>
             val i2 = state.idx + 1
             state.copy(idx = i2, elems = state.elems.updated(i2, a))
               -> F.pure(i2)
 
-    def drop(idx: Int): F[Unit] =
+    def drop(idx: Long): F[Unit] =
       ref.flatModify: state =>
         if state.offerrers.isEmpty then
           state.copy(elems = state.elems.removed(idx))
@@ -117,7 +120,7 @@ object RequestQueue:
       ref
         .discrete
         .filterWithPrevious(_.idx < _.idx)
-        .mapAccumulate(0): (lastEmitted, state) =>
+        .mapAccumulate(0L): (lastEmitted, state) =>
           (state.idx, state.elemsBetween(lastEmitted + 1, state.idx))
         .flatMap((_, c) => Stream.chunk(c))
 
@@ -127,8 +130,8 @@ object RequestQueue:
         ref <- SignallingRef[F].of[State[F, A]](State.empty)
       yield new Unprocessed(ref, bound)
 
-  case class State[F[_], A](idx: Int, elems: Map[Int, A], offerrers: ScalaQueue[Deferred[F, Unit]]):
-    def elemsBetween(start: Int, end: Int)(using ClassTag[A]): Chunk[A] =
+  case class State[F[_], A](idx: Long, elems: Map[Long, A], offerrers: ScalaQueue[Deferred[F, Unit]]):
+    def elemsBetween(start: Long, end: Long)(using ClassTag[A]): Chunk[A] =
       Chunk.iterator(Iterator.range(start, end + 1).flatMap(elems.get))
 
   object State:

@@ -2,6 +2,8 @@ package com.stoufexis.leader
 
 import cats.effect.*
 import cats.effect.std.Mutex
+import cats.effect.std.Queue
+import cats.effect.std.Semaphore
 import cats.implicits.given
 import fs2.*
 import fs2.grpc.syntax.all.*
@@ -11,13 +13,12 @@ import io.grpc.ServerServiceDefinition
 import io.grpc.netty.shaded.io.grpc.netty.*
 
 import com.stoufexis.leader.proto.protos.*
+import com.stoufexis.leader.rpc.RequestQueue.Unprocessed
 
 import scala.annotation.unused
-import scala.concurrent.duration.*
-import cats.effect.std.Semaphore
+import scala.collection.immutable.HashMap
 import scala.collection.mutable.ArrayBuilder
-import com.stoufexis.leader.rpc.RequestQueue.Unprocessed
-import cats.effect.std.Queue
+import scala.concurrent.duration.*
 
 /*
   TODOS For leader
@@ -116,24 +117,16 @@ import cats.effect.std.Queue
 //   def run: IO[Unit] = client
 
 object Main extends IOApp.Simple:
-  val arr: ArrayBuilder[Int] = ArrayBuilder.make
-  (10 to 30).foreach(arr.addOne(_))
+  case class AType(value: Int, hashv: Int) derives CanEqual:
+    override def equals(x: Any): Boolean =
+      x match
+        case i: AType => i.hashv == hashv
+        case _ => false
+
+    override def hashCode(): Int = hashv
 
   def run =
-    for
-      u <- Queue.bounded[IO, String](3)
-      i1 <- (u.offer("1") <* IO.println("Offerred 1"))
-      i2 <- (u.offer("2") <* IO.println("Offerred 2"))
-      i3 <- (u.offer("3") <* IO.println("Offerred 3"))
-      _ <- u.offer("4").start
-      _ <- IO.sleep(100.millis)
-      _ <- u.offer("5").start
-      _ <- IO.sleep(100.millis)
-      _ <- u.offer("6").start
-      _ <- IO.sleep(1.second)
-      _ <- u.take.start
-      _ <- u.take.start
-      _ <- u.take.start
-      _ <- u.tryTakeN(Some(10)).flatMap(IO.println)
-      _ <- IO.readLine
-    yield ()
+    val map = HashMap(AType(1, 1) -> "ASD", AType(2, 1) -> "ASB")
+
+    IO.println(map.get(AType(1, 1))) >>
+      IO.println(map.get(AType(2, 1)))
