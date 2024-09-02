@@ -21,20 +21,17 @@ trait RequestQueue[F[_], I, O]:
   def consume: Stream[F, (I, DeferredSink[F, O])]
 
   /** Offers most of the time succeed in a FIFO order, but if an offer has to wait for room, there are
-    * race conditions that make this not 100% guaranteed all of the time.
+    * race conditions that make this not 100% guaranteed all of the time. This is not handled by the
+    * RequestQueue, since it is overhead thats not necessary for most use cases.
     *
-    * If you want to guarantee the order of 2 offers, you have to:
-    *   - use tryOffer and manually retry
+    * If you want to guarantee the order of 2 offers, you have to do one of the following:
     *   - wait for the first one to finish before calling the second one
     *   - batch the offers in one
-    *   - perform some logic on the consumer side.
+    *   - tag your requests with some index and process them in the correct order on the consumer side
     *
     * This also means that different clients cannot rely on comparing their request time to gauge the
     * order of execution of their requests. IE. if one `offer` is called before a second one, it is not
     * guaranteed that the requests these offers produce will be executed in the same order.
-    *
-    * Conclusion: you can only guarantee order of execution between offers, if you schedule the next one
-    * after the previous one finishes.
     */
   def offer(input: I): F[O]
 
