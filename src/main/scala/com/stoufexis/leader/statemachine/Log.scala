@@ -1,7 +1,8 @@
 package com.stoufexis.leader.statemachine
 
-import com.stoufexis.leader.model.*
 import fs2.*
+
+import com.stoufexis.leader.model.*
 
 trait Log[F[_], A]:
   // empty chunk should advance the index. User for linearizable reads
@@ -9,6 +10,8 @@ trait Log[F[_], A]:
   // it overwrites all entries after prevIdx with the new entries
   def appendChunk(term: Term, prevIdx: Index, entries: Chunk[A]): F[Index]
 
+  /** Inclusive range
+    */
   def range(from: Index, until: Index): F[(Term, Chunk[A])]
 
   def readAll: Stream[F, (Index, A)]

@@ -17,6 +17,7 @@ import scala.concurrent.duration.*
 import cats.effect.std.Semaphore
 import scala.collection.mutable.ArrayBuilder
 import com.stoufexis.leader.rpc.RequestQueue.Unprocessed
+import cats.effect.std.Queue
 
 /*
   TODOS For leader
@@ -120,20 +121,19 @@ object Main extends IOApp.Simple:
 
   def run =
     for
-      u <- Unprocessed[IO, String](3)
+      u <- Queue.bounded[IO, String](3)
       i1 <- (u.offer("1") <* IO.println("Offerred 1"))
       i2 <- (u.offer("2") <* IO.println("Offerred 2"))
       i3 <- (u.offer("3") <* IO.println("Offerred 3"))
-      _ <- (u.offer("4") <* IO.println("Offerred 4")).start
+      _ <- u.offer("4").start
       _ <- IO.sleep(100.millis)
-      _ <- (u.offer("5") <* IO.println("Offerred 5")).start
+      _ <- u.offer("5").start
       _ <- IO.sleep(100.millis)
-      _ <- (u.offer("6") <* IO.println("Offerred 6")).start
+      _ <- u.offer("6").start
       _ <- IO.sleep(1.second)
-      _ <- u.drop(i2)
-      _ <- IO.sleep(1.second)
-      _ <- u.drop(i1)
-      _ <- IO.sleep(1.second)
-      _ <- u.drop(i3)
+      _ <- u.take.start
+      _ <- u.take.start
+      _ <- u.take.start
+      _ <- u.tryTakeN(Some(10)).flatMap(IO.println)
       _ <- IO.readLine
     yield ()

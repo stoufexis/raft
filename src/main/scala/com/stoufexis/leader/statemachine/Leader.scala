@@ -10,18 +10,16 @@ import com.stoufexis.leader.model.*
 import com.stoufexis.leader.rpc.*
 import com.stoufexis.leader.typeclass.IntLike.*
 
-// trait Leader[F[_], A, S]:
-//   def await: F[Outcome[F, Throwable, NodeInfo[S]]]
-
-//   def write(a: Chunk[A]): F[Option[S]]
-
-//   def read: F[Option[S]]
+import scala.collection.immutable.Queue
 
 object Leader:
 
+  /** Indexes are inclusive
+    */
   case class WaitingClient[F[_]: Monad, S](
     idxStart: Index,
-    sink:     DeferredSink[F, Option[S]]
+    idxEnd:   Index,
+    sink:     DeferredSink[F, S]
   )
 
   /** Linearizability of reads is implemented quite inefficiently right now. A read is inserted as a
@@ -187,8 +185,6 @@ object Leader:
           else
             debug as (newNodes, ResettableTimeout.Skip())
 
-    end partitionChecker
-
     // Assumes that matchIdxs for each node always increase
     def commitIdx(matchIdx: CloseableTopic[F, (NodeId, Index)]): Stream[F, Index] =
       matchIdx
@@ -199,9 +195,9 @@ object Leader:
         .dropping(1)
         .evalTap(cidx => logger.debug(s"Commit index is now at $cidx"))
 
-    // Only one client is allowed to wait at a time
-    // this is probably too strict, but can be easily extended
-    // TODO: Extend
+    /** A bound on waiting clients is not enforced here. Such a bound must be enforced upstream, in
+      * incomingClientRequests.
+      */
     def stateMachine(
       matchIdx: CloseableTopic[F, (NodeId, Index)],
       newIdxs:  CloseableTopic[F, Index],
@@ -214,26 +210,39 @@ object Leader:
       val startup: Stream[F, Nothing] =
         Stream.exec(newIdxs.publish(initIdx).void)
 
-      val acc: (Option[WaitingClient[F, S]], Index, S) =
-        (None, initIdx, initS)
+      // Waiting clients in the vector are assumed to have non-overlapping and continuous indexes
+      val acc: (Queue[WaitingClient[F, S]], Index, S) =
+        (Queue.empty, initIdx, initS)
+
+      // clients are assumed to be in order - the first to be dequeued is the oldest one
+      def fulfill(
+        clients: Queue[WaitingClient[F, S]],
+        cidx:    Index,
+        s:       S
+      ): F[(Queue[WaitingClient[F, S]], S)] =
+        clients.dequeueOption match
+          case Some((WaitingClient(start, end, sink), tail)) if end <= cidx =>
+            val fold: F[S] =
+              for
+                (_, entries) <- log.range(start, end)
+                newS         <- F.pure(entries.foldLeft(s)(automaton))
+                _            <- sink.complete(newS)
+              yield newS
+
+            fold.flatMap(fulfill(tail, cidx, _))
+
+          case _ => F.pure(clients, s)
 
       startup ++ commitsAndAppends.evalScanDrain(acc):
-        case ((Some(client), idxEnd, s), Left(commitIdx)) if idxEnd <= commitIdx =>
+        case ((clients, idxEnd, s), Left(commitIdx)) =>
+          fulfill(clients, commitIdx, s).map: (remaining, newS) =>
+            (remaining, idxEnd, newS)
+
+        case ((clients, idxEnd, s), Right(req)) =>
           for
-            (_, entries) <- log.range(client.idxStart, idxEnd)
-            newS         <- F.pure(entries.foldLeft(s)(automaton))
-            _            <- client.sink.complete_(Some(newS))
-          yield (None, idxEnd, newS)
-
-        case (st, Left(_)) =>
-          F.pure(st)
-
-        case ((None, idxEnd, s), Right(req)) =>
-          log.appendChunk(state.term, idxEnd, req.entries).map: newEnd =>
-            (Some(WaitingClient(idxEnd, req.sink)), newEnd, s)
-
-        case (st, Right(req)) =>
-          req.sink.complete(None) as st
+            newIdx <- log.appendChunk(state.term, idxEnd, req.entries)
+            _      <- newIdxs.publish(newIdx)
+          yield (clients.enqueue(WaitingClient(idxEnd + 1, newIdx, req.sink)), newIdx, s)
 
     end stateMachine
 
