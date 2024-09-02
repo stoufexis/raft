@@ -15,11 +15,19 @@ import scala.reflect.ClassTag
   * TODO: Test
   */
 trait RequestQueue[F[_], I, O]:
-  /** Offers most of the time succeed in a FIFO order, but there are race conditions that make this not
-    * 100% guaranteed all of the time.
+
+  /** Someone needs to always be consuming, otherwise offer requests will hang forever
+    */
+  def consume: Stream[F, (I, DeferredSink[F, O])]
+
+  /** Offers most of the time succeed in a FIFO order, but if an offer has to wait for room, there are
+    * race conditions that make this not 100% guaranteed all of the time.
     *
-    * If you want to guarantee the order of 2 offers, you have to either wait for the first one to finish
-    * before calling the second one, or you have to batch the offers in one.
+    * If you want to guarantee the order of 2 offers, you have to:
+    *   - use tryOffer and manually retry
+    *   - wait for the first one to finish before calling the second one
+    *   - batch the offers in one
+    *   - perform some logic on the consumer side.
     *
     * This also means that different clients cannot rely on comparing their request time to gauge the
     * order of execution of their requests. IE. if one `offer` is called before a second one, it is not
@@ -30,15 +38,16 @@ trait RequestQueue[F[_], I, O]:
     */
   def offer(input: I): F[O]
 
-  /** Someone needs to always be consuming, otherwise offer requests will hang forever
-    */
-  def consume: Stream[F, (I, DeferredSink[F, O])]
+  def tryOffer(input: I): F[Option[O]]
 
 object RequestQueue:
   def apply[F[_], I, O](bound: Int)(using F: Concurrent[F]): F[RequestQueue[F, I, O]] =
     for
       unprocessed <- Unprocessed[F, (I, DeferredSink[F, O])](bound)
     yield new:
+      def consume: Stream[F, (I, DeferredSink[F, O])] =
+        unprocessed.read
+
       def offer(input: I): F[O] = F.uncancelable: poll =>
         for
           d <- F.deferred[O]
@@ -46,8 +55,12 @@ object RequestQueue:
           o <- poll(d.get).guarantee(unprocessed.drop(i))
         yield o
 
-      def consume: Stream[F, (I, DeferredSink[F, O])] =
-        unprocessed.read
+      def tryOffer(input: I): F[Option[O]] = F.uncancelable: poll =>
+        for
+          d <- F.deferred[O]
+          i <- poll(unprocessed.tryOffer(input, d))
+          o <- i.traverse(i => poll(d.get).guarantee(unprocessed.drop(i)))
+        yield o
 
   // TODO: test cancellations and stuff
   // Design heavily inspired by the cats-effect Queue implementation for Concurrent
@@ -67,7 +80,9 @@ object RequestQueue:
     def offer(a: A): F[Int] =
       F.deferred[Unit].flatMap: offerrer =>
         val cleanup: F[Unit] = ref.flatModify: state =>
-          val (ours, others) = state.offerrers.partition(_ eq offerrer)
+          val (ours, others) =
+            state.offerrers.partition(_ eq offerrer)
+
           ours.headOption match
             // Our offerrer was not in the offerrers, so someone woke us up, but we were cancelled before succeeding in adding to the queue.
             // We need to wake up the next offerrer
