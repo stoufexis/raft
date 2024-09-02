@@ -31,7 +31,7 @@ object RequestQueue:
       def offer(input: I): F[O] = F.uncancelable: poll =>
         for
           d <- F.deferred[O]
-          i <- poll(unprocessed.optimisticOffer(input, d))
+          i <- poll(unprocessed.offer(input, d))
           o <- poll(d.get).guarantee(unprocessed.drop(i))
         yield o
 
@@ -39,6 +39,7 @@ object RequestQueue:
         unprocessed.read
 
   // TODO: test cancellations and stuff
+  // Design heavily inspired by the cats-effect Queue implementation for Concurrent
   class Unprocessed[F[_], A](
     ref:   SignallingRef[F, State[F, A]],
     bound: Int
@@ -46,48 +47,45 @@ object RequestQueue:
     // TODO handle idx overflows
     def tryOffer(a: A): F[Option[Int]] =
       ref.modify:
-        case state if state.unprocessedSize >= bound =>
+        case state if state.elems.size >= bound =>
           (state, None)
         case state =>
-          state.addUnprocessed(a).fmap(Some(_))
-
-    def optimisticOffer(a: A): F[Int] =
-      tryOffer(a).flatMap:
-        case Some(i) => F.pure(i)
-        case None    => offer(a)
+          val i2 = state.idx + 1
+          state.copy(idx = i2, elems = state.elems.updated(i2, a)) -> Some(i2)
 
     def offer(a: A): F[Int] =
-      F.uncancelable: poll =>
-        F.deferred[Unit].flatMap: offerrer =>
-          val cleanup: F[Unit] = ref.flatModify: state =>
-            state.waits.find(_ eq offerrer) match
-              // Someone cleaned us up, wakeup the next one
-              case None =>
-                if state.waits.isEmpty then
-                  state -> F.unit
-                else
-                  val (offerrer, rest) = state.waits.dequeue
-                  state.copy(waits = rest) -> offerrer.complete(()).void
+      F.deferred[Unit].flatMap: offerrer =>
+        val cleanup: F[Unit] = ref.flatModify: state =>
+          state.offerrers.find(_ eq offerrer) match
+            // Someone woke us up, but we were cancelled before succeeding in offering -> wakeup the next one
+            case None =>
+              if state.offerrers.isEmpty then
+                state -> F.unit
+              else
+                val (offerrer, rest) = state.offerrers.dequeue
+                state.copy(offerrers = rest) -> offerrer.complete(()).void
 
-              case Some(_) =>
-                state.copy(waits = state.waits.filter(_ ne offerrer)) -> F.unit
+            case Some(_) =>
+              state.copy(offerrers = state.offerrers.filter(_ ne offerrer)) -> F.unit
 
-          ref.flatModify:
-            case state if state.unprocessedSize >= bound =>
-              state.addWaiting(offerrer) -> poll(offerrer.get >> offer(a)).onCancel(cleanup)
-            case state =>
-              state.addUnprocessed(a).fmap(F.pure)
+        ref.flatModify:
+          case state if state.elems.size >= bound =>
+            state.copy(offerrers = state.offerrers.enqueue(offerrer))
+              -> (offerrer.get >> offer(a)).onCancel(cleanup)
+          case state =>
+            val i2 = state.idx + 1
+            state.copy(idx = i2, elems = state.elems.updated(i2, a))
+              -> F.pure(i2)
 
     def drop(idx: Int): F[Unit] =
-      F.uncancelable: _ =>
-        ref.flatModify: state =>
-          val s2 = state.dropUnprocessed(idx)
-
-          if s2.waits.isEmpty then
-            s2 -> F.unit
-          else
-            val (offerrer, rest) = state.waits.dequeue
-            s2.copy(waits = rest) -> offerrer.complete(()).void
+      ref.flatModify: state =>
+        if state.offerrers.isEmpty then
+          state.copy(elems = state.elems.removed(idx))
+            -> F.unit
+        else
+          val (offerrer, rest) = state.offerrers.dequeue
+          state.copy(elems = state.elems.removed(idx), offerrers = rest)
+            -> offerrer.complete(()).void.uncancelable
 
     // TODO: test
     def read(using ClassTag[A]): Stream[F, A] =
@@ -105,20 +103,7 @@ object RequestQueue:
         // waits <- Queue.unbounded[F, Deferred[F, Unit]]
       yield new Unprocessed(ref, bound)
 
-  case class State[F[_], A](idx: Int, elems: Map[Int, A], waits: ScalaQueue[Deferred[F, Unit]]):
-    def unprocessedSize: Int =
-      elems.size
-
-    def addUnprocessed(a: A): (State[F, A], Int) =
-      val i2 = idx + 1
-      copy(idx = i2, elems = elems.updated(i2, a)) -> i2
-
-    def dropUnprocessed(idx: Int): State[F, A] =
-      copy(elems = elems.removed(idx))
-
-    def addWaiting(offerrer: Deferred[F, Unit]): State[F, A] =
-      copy(waits = waits.enqueue(offerrer))
-
+  case class State[F[_], A](idx: Int, elems: Map[Int, A], offerrers: ScalaQueue[Deferred[F, Unit]]):
     def elemsBetween(start: Int, end: Int)(using ClassTag[A]): Chunk[A] =
       val arr: ArrayBuilder[A] = ArrayBuilder.make
       (start to end).foreach(elems.get(_).foreach(arr.addOne))
