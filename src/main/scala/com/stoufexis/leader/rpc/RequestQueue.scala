@@ -15,6 +15,19 @@ import scala.reflect.ClassTag
   * TODO: Test
   */
 trait RequestQueue[F[_], I, O]:
+  /** Offers most of the time succeed in a FIFO order, but there are race conditions that make this not
+    * 100% guaranteed all of the time.
+    *
+    * If you want to guarantee the order of 2 offers, you have to either wait for the first one to finish
+    * before calling the second one, or you have to batch the offers in one.
+    *
+    * This also means that different clients cannot rely on comparing their request time to gauge the
+    * order of execution of their requests. IE. if one `offer` is called before a second one, it is not
+    * guaranteed that the requests these offers produce will be executed in the same order.
+    *
+    * Conclusion: you can only guarantee order of execution between offers, if you schedule the next one
+    * after the previous one finishes.
+    */
   def offer(input: I): F[O]
 
   /** Someone needs to always be consuming, otherwise offer requests will hang forever

@@ -124,17 +124,16 @@ object Main extends IOApp.Simple:
       i1 <- (u.offer("1") <* IO.println("Offerred 1"))
       i2 <- (u.offer("2") <* IO.println("Offerred 2"))
       i3 <- (u.offer("3") <* IO.println("Offerred 3"))
-      _ <- u.show
       _ <- (u.offer("4") <* IO.println("Offerred 4")).start
       _ <- IO.sleep(100.millis)
       _ <- (u.offer("5") <* IO.println("Offerred 5")).start
       _ <- IO.sleep(100.millis)
       _ <- (u.offer("6") <* IO.println("Offerred 6")).start
       _ <- IO.sleep(1.second)
-      _ <- (u.drop(i2)).start
-      _ <- (u.drop(i3)).start
-      _ <- (u.drop(i1)).start
+      _ <- u.drop(i2)
       _ <- IO.sleep(1.second)
-      _ <- u.show
+      _ <- u.drop(i1)
+      _ <- IO.sleep(1.second)
+      _ <- u.drop(i3)
       _ <- IO.readLine
     yield ()
