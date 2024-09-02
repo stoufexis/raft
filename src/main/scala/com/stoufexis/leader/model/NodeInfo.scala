@@ -35,6 +35,9 @@ case class NodeInfo[S](
   def toFollower: NodeInfo[S] =
     transition(Role.Follower)
 
+  def toVotedFollower(candidateId: NodeId, newTerm: Term): NodeInfo[S] =
+    transition(Role.VotedFollower(candidateId), newTerm)
+
   def isNew(otherTerm: Term): Boolean =
     otherTerm > term
 

@@ -56,16 +56,16 @@ object Leader:
           req.termExpired(state, sink) as None
 
         case IncomingAppend(req, sink) if state.isCurrent(req.term) =>
-          req.duplicateLeaders(sink)
+          req.duplicateLeaders(sink) // throws error
 
         /** newer leader detected. Dont respond to the request, let it be consumed when we have
-          * transitioned to follower this ensures that the response happens only after this transition
-          * has taken place. Otherwise, there is a chance that a different transition will happen
-          * instead. This is a race condition caused by the parJoin of potentially transition-producing
-          * streams.
+          * transitioned to follower. This ensures that the response happens only after this transition
+          * has taken place. Otherwise, there is a chance that a different transition will happen instead
+          * even after responding. This is a race condition caused by the parJoin of potentially
+          * transition-producing streams.
           */
         case IncomingAppend(req, sink) =>
-          F.pure(Some(state.transition(Role.Follower, req.term)))
+          F.pure(Some(state.toFollower(req.term)))
 
     val handleIncomingVotes: Stream[F, NodeInfo[S]] =
       rpc.incomingVotes.evalMapFilter:
@@ -75,11 +75,11 @@ object Leader:
         case IncomingVote(req, sink) if state.isCurrent(req.term) =>
           req.reject(sink) as None
 
-        /** This leader is being superseeded. As with the handle appends transition, want until the
+        /** This leader is being superseeded. As with the handleAppends transition, want until the
           * transition has happened to grant.
           */
         case IncomingVote(req, sink) =>
-          F.pure(Some(state.transition(Role.VotedFollower(req.candidateId), req.term)))
+          F.pure(Some(state.toVotedFollower(req.candidateId, req.term)))
 
     /** Maintains a matchIndex for each node, which points to the last index in the log for which every
       * preceeding entry matches, including the matchIndex entry.
@@ -235,8 +235,8 @@ object Leader:
 
       startup ++ commitsAndAppends.evalScanDrain(acc):
         case ((clients, idxEnd, s), Left(commitIdx)) =>
-          fulfill(clients, commitIdx, s).map: (remaining, newS) =>
-            (remaining, idxEnd, newS)
+          fulfill(clients, commitIdx, s)
+            .map((_, idxEnd, _))
 
         case ((clients, idxEnd, s), Right(req)) =>
           for
