@@ -10,6 +10,9 @@ import fs2.concurrent.*
 import scala.collection.immutable.Queue as ScalaQueue
 import scala.collection.mutable.ArrayBuilder
 import scala.reflect.ClassTag
+import scala.collection.immutable.LongMap
+import scala.collection.immutable.IntMap
+import cats.collections.HashMap
 
 /** A request is committed, and thus dequeued, only if a response is produced. Any later consumers will
   * see the same request. Used to implement RPC.
@@ -56,17 +59,19 @@ object RequestQueue:
     def offer(a: A): F[Int] =
       F.deferred[Unit].flatMap: offerrer =>
         val cleanup: F[Unit] = ref.flatModify: state =>
-          state.offerrers.find(_ eq offerrer) match
-            // Someone woke us up, but we were cancelled before succeeding in offering -> wakeup the next one
+          val (ours, others) = state.offerrers.partition(_ eq offerrer)
+          ours.headOption match
+            // Our offerrer was not in the offerrers, so someone woke us up, but we were cancelled before succeeding in adding to the queue.
+            // We need to wake up the next offerrer
             case None =>
-              if state.offerrers.isEmpty then
+              if ours.isEmpty then
                 state -> F.unit
               else
-                val (offerrer, rest) = state.offerrers.dequeue
+                val (offerrer, rest) = ours.dequeue
                 state.copy(offerrers = rest) -> offerrer.complete(()).void
 
             case Some(_) =>
-              state.copy(offerrers = state.offerrers.filter(_ ne offerrer)) -> F.unit
+              state.copy(offerrers = others) -> F.unit
 
         ref.flatModify:
           case state if state.elems.size >= bound =>
@@ -100,14 +105,11 @@ object RequestQueue:
     def apply[F[_]: Concurrent, A](bound: Int): F[Unprocessed[F, A]] =
       for
         ref <- SignallingRef[F].of[State[F, A]](State.empty)
-        // waits <- Queue.unbounded[F, Deferred[F, Unit]]
       yield new Unprocessed(ref, bound)
 
   case class State[F[_], A](idx: Int, elems: Map[Int, A], offerrers: ScalaQueue[Deferred[F, Unit]]):
     def elemsBetween(start: Int, end: Int)(using ClassTag[A]): Chunk[A] =
-      val arr: ArrayBuilder[A] = ArrayBuilder.make
-      (start to end).foreach(elems.get(_).foreach(arr.addOne))
-      Chunk.array(arr.result())
+      Chunk.iterator(Iterator.range(start, end + 1).flatMap(elems.get))
 
   object State:
     def empty[F[_], A]: State[F, A] = State(0, Map.empty, ScalaQueue.empty)
