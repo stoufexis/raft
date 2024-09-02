@@ -2,17 +2,12 @@ package com.stoufexis.leader.rpc
 
 import cats.effect.implicits.given
 import cats.effect.kernel.*
-import cats.effect.std.*
 import cats.implicits.given
 import fs2.*
 import fs2.concurrent.*
 
 import scala.collection.immutable.Queue as ScalaQueue
-import scala.collection.mutable.ArrayBuilder
 import scala.reflect.ClassTag
-import scala.collection.immutable.LongMap
-import scala.collection.immutable.IntMap
-import cats.collections.HashMap
 
 /** A request is committed, and thus dequeued, only if a response is produced. Any later consumers will
   * see the same request. Used to implement RPC.
