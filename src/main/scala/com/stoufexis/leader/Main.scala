@@ -117,16 +117,8 @@ import scala.concurrent.duration.*
 //   def run: IO[Unit] = client
 
 object Main extends IOApp.Simple:
-  case class AType(value: Int, hashv: Int) derives CanEqual:
-    override def equals(x: Any): Boolean =
-      x match
-        case i: AType => i.hashv == hashv
-        case _ => false
-
-    override def hashCode(): Int = hashv
-
   def run =
-    val map = HashMap(AType(1, 1) -> "ASD", AType(2, 1) -> "ASB")
-
-    IO.println(map.get(AType(1, 1))) >>
-      IO.println(map.get(AType(2, 1)))
+    IO.println((Long.MaxValue - 4).hashCode()) >>
+    IO.println((Long.MaxValue - 3).hashCode()) >>
+    IO.println((Long.MaxValue - 2).hashCode()) >>
+    IO.println((Long.MaxValue - 1).hashCode())
