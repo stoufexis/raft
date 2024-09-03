@@ -4,47 +4,36 @@ import cats.effect.kernel.*
 import cats.implicits.given
 import fs2.*
 import fs2.concurrent.Topic
-import fs2.concurrent.Topic.Closed
+import cats.effect.IO
 
-class CloseableTopic[F[_], A](topic: Topic[F, A], shutdown: Deferred[F, Unit])(using
-  F: Concurrent[F]
-):
-  def subscribeUnbounded: Stream[F, A] =
-    subscribe(Int.MaxValue) // this is how the fs2 topic also does it
+trait CloseableTopic[F[_], A]:
+  def publish(a: A): F[Boolean]
 
-  def subscribe(bound: Int): Stream[F, A] =
-    Stream.eval(shutdown.tryGet).flatMap:
-      case Some(()) =>
-        Stream.empty
+  def publishOrThrow(a: A): F[Unit]
 
-      case None =>
-        topic
-          .subscribe(bound)
-          .interruptWhen(shutdown.get.attempt)
+  def subscribeUnbounded: Stream[F, A]
 
-  def publish(a: A): F[Boolean] =
-    shutdown.tryGet.flatMap:
-      case Some(()) =>
-        F.pure(false)
-
-      case None =>
-        topic.publish1(a).flatMap:
-          case Left(_)   => F.pure(false)
-          case Right(()) => F.pure(true)
-
-  def publishOrThrow(a: A): F[Unit] =
-    val err: IllegalStateException =
-      IllegalStateException("Topic used after closing")
-
-    publish(a).ifM(F.unit, F.raiseError(err))
-
-  def close: F[Unit] =
-    shutdown.complete(()).void >> topic.close.void
+  def subscribe(bound: Int): Stream[F, A]
 
 object CloseableTopic:
-  def apply[F[_]: Concurrent, A]: Resource[F, CloseableTopic[F, A]] =
-    val make: F[CloseableTopic[F, A]] =
-      (Topic[F, A], Deferred[F, Unit])
-        .mapN(new CloseableTopic(_, _))
+  def apply[F[_], A](using F: Concurrent[F]): Resource[F, CloseableTopic[F, A]] =
+    for
+      topic    <- Resource.eval(Topic[F, A])
+      shutdown <- Resource.eval(Deferred[F, Unit])
+      _        <- Resource.onFinalize(shutdown.complete(()).void >> topic.close.void)
+    yield new:
+      def subscribeUnbounded: Stream[F, A] =
+        subscribe(Int.MaxValue) // this is how the fs2 topic also does it
 
-    Resource.make(make)(_.close)
+      def subscribe(bound: Int): Stream[F, A] =
+        topic.subscribe(bound).interruptWhen(shutdown.get.attempt)
+
+      def publish(a: A): F[Boolean] =
+        F.race(shutdown.get, topic.publish1(a).map(_.isRight))
+          .map(_.fold(_ => false, identity))
+
+      def publishOrThrow(a: A): F[Unit] =
+        publish(a).ifM(
+          F.unit,
+          F.raiseError(IllegalStateException("Topic used after closing"))
+        )
