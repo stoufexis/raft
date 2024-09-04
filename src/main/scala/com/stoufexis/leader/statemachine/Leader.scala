@@ -107,7 +107,7 @@ object Leader:
         req.termExpired(state, sink) as None
 
       case IncomingAppend(req, sink) if state.isCurrent(req.term) =>
-        req.duplicateLeaders(sink) // throws error
+        req.duplicateLeaders(sink) // throws error, it should impossible to reach this
 
       /** newer leader detected. Dont respond to the request, let it be consumed when we have
         * transitioned to follower. This ensures that the response happens only after this transition has

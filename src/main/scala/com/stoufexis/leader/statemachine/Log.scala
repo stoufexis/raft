@@ -10,6 +10,13 @@ trait Log[F[_], A]:
   // it overwrites all entries after prevIdx with the new entries
   def appendChunk(term: Term, prevIdx: Index, entries: Chunk[A]): F[Index]
 
+  def appendChunkIfMatches(
+    prevLogTerm:  Term,
+    prevLogIndex: Index,
+    term:         Term,
+    entries:      Chunk[A]
+  ): F[Option[Index]]
+
   /** Inclusive range
     */
   def range(from: Index, until: Index): F[(Term, Chunk[A])]

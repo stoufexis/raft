@@ -163,7 +163,13 @@ extension [F[_]](req: AppendEntries[?])(using F: MonadThrow[F], logger: Logger[F
   def accepted(sink: DeferredSink[F, AppendResponse]): F[Unit] =
     for
       _ <- sink.complete_(AppendResponse.Accepted)
-      _ <- logger.info(s"Append accepted from ${req.leaderId}")
+      _ <- logger.debug(s"Append accepted from ${req.leaderId}")
+    yield ()
+
+  def inconsistent(sink: DeferredSink[F, AppendResponse]): F[Unit] =
+    for
+      _ <- sink.complete_(AppendResponse.NotConsistent)
+      _ <- logger.warn(s"Append from ${req.leaderId} was inconsistent with local log")
     yield ()
 
 extension [F[_]](req: RequestVote)(using F: MonadThrow[F], logger: Logger[F])

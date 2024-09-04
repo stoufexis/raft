@@ -3,10 +3,10 @@ package com.stoufexis.leader.model
 import com.stoufexis.leader.typeclass.IntLike.*
 
 case class NodeInfo[S](
-  role:           Role,
-  term:           Term,
-  currentNode:    NodeId,
-  otherNodes:     Set[NodeId],
+  role:        Role,
+  term:        Term,
+  currentNode: NodeId,
+  otherNodes:  Set[NodeId]
 ):
   def print: String =
     s"${role.toString}(term = ${term.toInt})"
@@ -30,13 +30,19 @@ case class NodeInfo[S](
     copy(role = newRole)
 
   def toFollower(newTerm: Term): NodeInfo[S] =
-    transition(Role.Follower, newTerm)
+    transition(Role.Follower(None), newTerm)
 
   def toFollower: NodeInfo[S] =
-    transition(Role.Follower)
+    transition(Role.Follower(None))
 
   def toVotedFollower(candidateId: NodeId, newTerm: Term): NodeInfo[S] =
-    transition(Role.VotedFollower(candidateId), newTerm)
+    transition(Role.Follower(Some(candidateId)), newTerm)
+
+  def toCandidateNextTerm: NodeInfo[S] =
+    transition(Role.Candidate, term + 1)
+
+  def newTerm(term: Term): NodeInfo[S] =
+    copy(term = term)
 
   def isNew(otherTerm: Term): Boolean =
     otherTerm > term
@@ -49,3 +55,9 @@ case class NodeInfo[S](
 
   def isCurrent(otherTerm: Term): Boolean =
     otherTerm == term
+
+  def votedFor(candidateId: NodeId): Boolean =
+    role match
+      case Role.Follower(vfor) => vfor.exists(_ == candidateId)
+      case Role.Candidate      => candidateId == currentNode
+      case Role.Leader         => candidateId == currentNode
