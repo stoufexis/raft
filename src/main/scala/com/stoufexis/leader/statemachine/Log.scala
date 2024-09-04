@@ -15,7 +15,7 @@ trait Log[F[_], A]:
     prevLogIndex: Index,
     term:         Term,
     entries:      Chunk[A]
-  ): F[Option[Index]]
+  ): F[Boolean]
 
   /** Inclusive range
     */

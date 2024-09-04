@@ -52,14 +52,11 @@ object Follower:
         req.termExpired(state, sink) -> ResettableTimeout.Skip()
 
       case IncomingAppend(req, sink) if state.isCurrent(req.term) =>
-        val response: F[Unit] =
-          log.appendChunkIfMatches(req.prevLogTerm, req.prevLogIndex, req.term, req.entries).flatMap:
-            case Some(newIdx) => req.accepted(sink)
-            case None         => req.inconsistent(sink)
+        log
+          .appendChunkIfMatches(req.prevLogTerm, req.prevLogIndex, req.term, req.entries)
+          .ifM(req.accepted(sink),req.inconsistent(sink)) -> ResettableTimeout.Reset()
 
-        response -> ResettableTimeout.Reset()
-
-      /** Let the request be fulfilled when we transition
+      /** Let the request be fulfilled after we transition
         */
       case IncomingAppend(req, sink) =>
         F.unit -> ResettableTimeout.Output(state.newTerm(req.term))
