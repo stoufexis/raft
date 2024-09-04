@@ -120,13 +120,12 @@ extension [F[_], A](stream: Stream[F, A])
   def mapFilterAccumulate[S, B](init: S)(f: (S, A) => (S, Option[B])): Stream[F, B] =
     stream.mapAccumulate(init)(f).mapFilter(_._2)
 
-def raceFirst[F[_]: Concurrent, A](streams: Iterable[Stream[F, A]]): Stream[F, A] =
-  Stream
-    .iterable(streams.map(_.head))
+def raceFirst[F[_]: Concurrent, A](streams: List[Stream[F, A]]): Stream[F, A] =
+  streams.map(_.head)
     .parJoinUnbounded
-    .take(1)
+    .head
 
-def raceFirstOrError[F[_]: Concurrent, A](streams: Iterable[Stream[F, A]]): F[A] =
+def raceFirstOrError[F[_]: Concurrent, A](streams: List[Stream[F, A]]): F[A] =
   raceFirst(streams)
     .compile
     .lastOrError

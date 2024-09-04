@@ -68,11 +68,7 @@ object Leader:
       streams: List[Stream[F, NodeInfo[S]]] =
         handleIncomingAppends(state) :: handleIncomingVotes(state) :: checker :: sm :: appenders
 
-      out: NodeInfo[S] <-
-        Stream
-          .iterable(streams.map(_.take(1)))
-          .parJoinUnbounded
-          .take(1)
+      out: NodeInfo[S] <- raceFirst(streams)
     yield out
 
   def handleIncomingVotes[F[_], A, S](

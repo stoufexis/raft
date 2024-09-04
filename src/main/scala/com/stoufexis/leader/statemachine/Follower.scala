@@ -12,6 +12,29 @@ import com.stoufexis.leader.rpc.*
 import scala.concurrent.duration.FiniteDuration
 
 object Follower:
+  def apply[F[_], A, S: Monoid](
+    state: NodeInfo[S]
+  )(using
+    F:       Temporal[F],
+    log:     Log[F, A],
+    rpc:     RPC[F, A, S],
+    timeout: Timeout[F],
+    logger:  Logger[F]
+  ): Stream[F, NodeInfo[S]] =
+    for
+      electionTimeout: FiniteDuration <-
+        Stream.eval(timeout.nextElectionTimeout)
+
+      handleAppends: Stream[F, NodeInfo[S]] =
+        handleIncomingAppends(state, electionTimeout)
+
+      handleVotes: Stream[F, NodeInfo[S]] =
+        handleIncomingVotes(state)
+
+      out: NodeInfo[S] <-
+        raceFirst(List(handleAppends, handleVotes))
+    yield out
+
   def handleIncomingAppends[F[_], A, S](
     state:           NodeInfo[S],
     electionTimeout: FiniteDuration
