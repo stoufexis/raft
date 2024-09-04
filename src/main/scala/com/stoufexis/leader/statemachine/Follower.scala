@@ -26,17 +26,20 @@ object Follower:
       F.pure(state.toCandidateNextTerm)
     ):
       case IncomingAppend(req, sink) if state.isExpired(req.term) =>
-        req.termExpired(state, sink) as ResettableTimeout.Skip()
+        req.termExpired(state, sink) -> ResettableTimeout.Skip()
 
       case IncomingAppend(req, sink) if state.isCurrent(req.term) =>
-        log.appendChunkIfMatches(req.prevLogTerm, req.prevLogIndex, req.term, req.entries).flatMap:
-          case Some(newIdx) => req.accepted(sink) as ResettableTimeout.Reset()
-          case None         => req.inconsistent(sink) as ResettableTimeout.Reset()
+        val response: F[Unit] =
+          log.appendChunkIfMatches(req.prevLogTerm, req.prevLogIndex, req.term, req.entries).flatMap:
+            case Some(newIdx) => req.accepted(sink)
+            case None         => req.inconsistent(sink)
+
+        response -> ResettableTimeout.Reset()
 
       /** Let the request be fulfilled when we transition
         */
       case IncomingAppend(req, sink) =>
-        F.pure(ResettableTimeout.Output(state.newTerm(req.term)))
+        F.unit -> ResettableTimeout.Output(state.newTerm(req.term))
 
   def handleIncomingVotes[F[_], A, S](
     state: NodeInfo[S]
