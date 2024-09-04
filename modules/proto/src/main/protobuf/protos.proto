@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+import "scalapb/scalapb.proto";
+import "google/protobuf/struct.proto";
+
+option (scalapb.options) = {
+  scope: FILE
+  package_name: "com.stoufexis.raft.proto"
+  preserve_unknown_fields: false
+  scala3_sources: true
+};
+
+service Pinger {
+  rpc ping(PingRequest) returns (PingResponse) {}
+}
+
+service Structer {
+  rpc astruct(MessageIn) returns (MessageOut) {}
+}
+
+message MessageIn {
+  repeated bytes payloads = 1;
+}
+
+message MessageOut {
+  string indication = 1;
+}
+
+message PingRequest {
+  string payload = 1;
+}
+
+message PingResponse {
+  string payload = 1;
+}

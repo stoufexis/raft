@@ -1,7 +1,7 @@
 ThisBuild / scalaVersion := "3.4.2"
-ThisBuild / name         := "zio-leader"
+ThisBuild / name         := "raft"
 ThisBuild / version      := "0.1.0-SNAPSHOT"
-ThisBuild / organization := "com.stoufexis.leader"
+ThisBuild / organization := "com.stoufexis.raft"
 
 lazy val cats =
   Seq(
@@ -31,10 +31,18 @@ lazy val test =
     "org.scalameta" %% "munit" % "1.0.0" % Test
   )
 
-lazy val root =
+lazy val proto =
   project
-    .in(file("."))
+    .in(file("modules/proto"))
     .enablePlugins(Fs2Grpc)
+    .settings(
+      libraryDependencies ++= grpc,
+    )
+
+lazy val raft =
+  project
+    .in(file("modules/raft"))
+    .dependsOn(proto)
     .settings(
       libraryDependencies ++= cats ++ log ++ grpc ++ test,
       scalacOptions ++= Seq(
@@ -46,7 +54,12 @@ lazy val root =
         "-Wunused:locals",
         "-Wunused:params",
         "-Wunused:privates",
-        "-language:strictEquality"
-        // "-source:future" TODO: MAKE IT WORK!!!
+        "-language:strictEquality",
+        "-source:future"
       )
     )
+
+lazy val root =
+  project
+    .in(file("."))
+    .aggregate(proto, raft)
