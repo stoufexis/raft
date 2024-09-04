@@ -56,7 +56,7 @@ object Leader:
       checker: Stream[F, NodeInfo[S]] =
         partitionChecker(state, matchIdxs, electionTimeout)
 
-      client: Stream[F, Nothing] =
+      sm: Stream[F, Nothing] =
         stateMachine(state, matchIdxs, newIdxs, initState, initIdx, automaton)
 
       appenders: List[Stream[F, NodeInfo[S]]] =
@@ -66,7 +66,7 @@ object Leader:
           .map(appender(state, _, newIdxs, matchIdxs, heartbeatEvery))
 
       streams: List[Stream[F, NodeInfo[S]]] =
-        handleIncomingAppends(state) :: handleIncomingVotes(state) :: checker :: client :: appenders
+        handleIncomingAppends(state) :: handleIncomingVotes(state) :: checker :: sm :: appenders
 
       out: NodeInfo[S] <-
         Stream
@@ -226,8 +226,8 @@ object Leader:
     * preceeding entry matches, including the matchIndex entry.
     *
     * If there is a new uncommitted index, it attempts to send the uncommitted records to the node. If
-    * the node returns a NotConsistent, we attempt to find the largest index for which the logs match,
-    * by entering seek mode. Seek mode means repeatedly sending empty AppendEntries requests, each time
+    * the node returns a NotConsistent, we attempt to find the largest index for which the logs match, by
+    * entering seek mode. Seek mode means repeatedly sending empty AppendEntries requests, each time
     * decreasing the matchIndex by 1, until an Accepted response is returned, which means we have found
     * the first log entry for which the logs match. After we have found that index, we exit seek mode and
     * attempt to replicate to the node all the leaders entries starting at that index, overwritting any

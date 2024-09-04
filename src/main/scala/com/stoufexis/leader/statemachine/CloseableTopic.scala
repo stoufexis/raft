@@ -4,7 +4,6 @@ import cats.effect.kernel.*
 import cats.implicits.given
 import fs2.*
 import fs2.concurrent.Topic
-import cats.effect.IO
 
 trait CloseableTopic[F[_], A]:
   def publish(a: A): F[Boolean]
