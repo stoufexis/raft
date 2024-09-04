@@ -80,8 +80,8 @@ object RequestQueue:
             state.offerrers.partition(_ eq offerrer)
 
           ours.headOption match
-            // Our offerrer was not in the offerrers, so someone woke us up, but we were cancelled before succeeding in adding to the queue.
-            // We need to wake up the next offerrer
+            // Our offerrer was not in the offerrers so someone woke us up, but we were cancelled before succeeding in adding to the queue.
+            // We need to wake up the next offerrer because we did not fill the empty spot ourselves.
             case None =>
               if ours.isEmpty then
                 state -> F.unit
@@ -97,10 +97,9 @@ object RequestQueue:
             state.copy(offerrers = state.offerrers.enqueue(offerrer))
               -> (offerrer.get >> offer(a)).onCancel(cleanup)
 
-          // Assuming 100000 requests a second, which is rediculous,
-          // this will overflow at just under 3000000 years, if there is no reset
-          // Nothing to be done about overflows...
           case state =>
+            // Assuming an average of 1000 requests a second, which is already too many,
+            // this will overflow at just under 300_000_000 years. Nothing to be done about overflows...
             val i2 = state.idx + 1
             state.copy(idx = i2, elems = state.elems.updated(i2, a))
               -> F.pure(i2)
