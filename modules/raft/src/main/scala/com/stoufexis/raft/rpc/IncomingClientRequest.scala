@@ -5,5 +5,5 @@ import fs2.*
 
 case class IncomingClientRequest[F[_], A, S](
   entries: Chunk[A],
-  sink:    DeferredSink[F, S]
+  sink:    DeferredSink[F, ClientResponse[S]]
 )

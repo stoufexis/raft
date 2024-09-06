@@ -5,6 +5,7 @@ import com.stoufexis.raft.typeclass.IntLike.*
 case class NodeInfo[S](
   role:        Role,
   term:        Term,
+  knownLeader: Option[NodeId],
   currentNode: NodeId,
   otherNodes:  Set[NodeId]
 ):
@@ -20,32 +21,26 @@ case class NodeInfo[S](
   def isMajority(nodes: Set[NodeId]): Boolean =
     (nodes intersect allNodes).size >= majorityCnt
 
-  def transition(newRole: Role, termf: Term => Term): NodeInfo[S] =
-    copy(role = newRole, term = termf(term))
+  def toFollower(newTerm: Term, leaderId: NodeId): NodeInfo[S] =
+    copy(role = Role.Follower(None), term = newTerm, knownLeader = Some(leaderId))
 
-  def transition(newRole: Role, newTerm: Term): NodeInfo[S] =
-    copy(role = newRole, term = newTerm)
+  def toFollower(leaderId: NodeId): NodeInfo[S] =
+    copy(role = Role.Follower(None), knownLeader = Some(leaderId))
 
-  def transition(newRole: Role): NodeInfo[S] =
-    copy(role = newRole)
+  def toFollowerUnknownLeader(newTerm: Term): NodeInfo[S] =
+    copy(role = Role.Follower(None), term = newTerm, knownLeader = None)
 
-  def toFollower(newTerm: Term): NodeInfo[S] =
-    transition(Role.Follower(None), newTerm)
-
-  def toFollower: NodeInfo[S] =
-    transition(Role.Follower(None))
+  def toFollowerUnknownLeader: NodeInfo[S] =
+    copy(role = Role.Follower(None), knownLeader = None)
 
   def toVotedFollower(candidateId: NodeId, newTerm: Term): NodeInfo[S] =
-    transition(Role.Follower(Some(candidateId)), newTerm)
+    copy(role = Role.Follower(Some(candidateId)), term = newTerm)
 
   def toCandidateNextTerm: NodeInfo[S] =
-    transition(Role.Candidate, term + 1)
+    copy(role = Role.Candidate, term = term + 1)
 
   def toLeader: NodeInfo[S] =
-    transition(Role.Leader)
-
-  def newTerm(term: Term): NodeInfo[S] =
-    copy(term = term)
+    copy(role = Role.Leader, knownLeader = Some(currentNode))
 
   def isNew(otherTerm: Term): Boolean =
     otherTerm > term
@@ -58,6 +53,9 @@ case class NodeInfo[S](
 
   def isCurrent(otherTerm: Term): Boolean =
     otherTerm == term
+
+  def isLeader(node: NodeId): Boolean =
+    knownLeader.exists(_ == node)
 
   def votedFor(candidateId: NodeId): Boolean =
     role match

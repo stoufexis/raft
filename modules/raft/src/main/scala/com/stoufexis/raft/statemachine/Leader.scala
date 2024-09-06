@@ -112,7 +112,7 @@ object Leader:
         * transition-producing streams.
         */
       case IncomingAppend(req, sink) =>
-        F.pure(Some(state.toFollower(req.term)))
+        F.pure(Some(state.toFollower(req.term, req.leaderId)))
 
   /** Receives client requests and fulfills them. Every request's entries are immediatelly appended to
     * the local log and we attempt to commit them. A commit is initiated by informing the appenders of a
@@ -143,7 +143,7 @@ object Leader:
     log:    Log[F, A]
   ): Stream[F, Nothing] =
     // start, end (inclusive), sink
-    type WaitingClient = (Index, Index, DeferredSink[F, S])
+    type WaitingClient = (Index, Index, DeferredSink[F, ClientResponse[S]])
 
     // clients are assumed to be in order here - the first to be dequeued is the oldest one
     def fulfill(clients: Queue[WaitingClient], cidx: Index, s: S): F[(Queue[WaitingClient], S)] =
@@ -151,7 +151,7 @@ object Leader:
         case Some(((start, end, sink), tail)) if end <= cidx =>
           log.range(start, end).flatMap: (_, entries) =>
             val newS = entries.foldLeft(s)(automaton)
-            sink.complete(newS) >> fulfill(tail, cidx, newS)
+            sink.complete(ClientResponse.Executed(newS)) >> fulfill(tail, cidx, newS)
 
         case _ => F.pure(clients, s)
 
@@ -200,7 +200,7 @@ object Leader:
     matchIdxs.subscribeUnbounded.resettableTimeoutAccumulate(
       init      = Set(state.currentNode),
       timeout   = electionTimeout,
-      onTimeout = F.pure(state.toFollower)
+      onTimeout = F.pure(state.toFollowerUnknownLeader)
     ):
       case (nodes, (node, _)) =>
         val newNodes: Set[NodeId] =
@@ -288,7 +288,7 @@ object Leader:
               pinged() >> go(matchIdx - 1, newIdx, seek = true)
 
             case AppendResponse.TermExpired(t) =>
-              pinged() as Right(state.toFollower(t))
+              pinged() as Right(state.toFollowerUnknownLeader(t))
 
             case AppendResponse.IllegalState(msg) =>
               F.raiseError(IllegalStateException(msg))

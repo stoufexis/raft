@@ -31,9 +31,18 @@ object Follower:
       handleVotes: Stream[F, NodeInfo[S]] =
         handleIncomingVotes(state)
 
+      handleClient: Stream[F, Nothing] =
+        handleClientRequests(state)
+
       out: NodeInfo[S] <-
-        raceFirst(List(handleAppends, handleVotes))
+        raceFirst(List(handleAppends, handleVotes, handleClient))
     yield out
+
+  def handleClientRequests[F[_], A, S](state: NodeInfo[S])(using rpc: RPC[F, A, S]): Stream[F, Nothing] =
+    rpc
+      .incomingClientRequests
+      .evalMap(_.sink.complete(ClientResponse.knownLeader(state.knownLeader)))
+      .drain
 
   def handleIncomingAppends[F[_], A, S](
     state:           NodeInfo[S],
@@ -48,7 +57,7 @@ object Follower:
       case IncomingAppend(req, sink) if state.isExpired(req.term) =>
         req.termExpired(state, sink) -> ResettableTimeout.Skip()
 
-      case IncomingAppend(req, sink) if state.isCurrent(req.term) =>
+      case IncomingAppend(req, sink) if state.isCurrent(req.term) && state.isLeader(req.leaderId) =>
         log
           .appendChunkIfMatches(req.prevLogTerm, req.prevLogIndex, req.term, req.entries)
           .ifM(req.accepted(sink), req.inconsistent(sink)) -> ResettableTimeout.Reset()
@@ -56,7 +65,7 @@ object Follower:
       /** Let the request be fulfilled after we transition
         */
       case IncomingAppend(req, sink) =>
-        F.unit -> ResettableTimeout.Output(state.newTerm(req.term))
+        F.unit -> ResettableTimeout.Output(state.toFollower(req.term, req.leaderId))
 
   def handleIncomingVotes[F[_], A, S](
     state: NodeInfo[S]
