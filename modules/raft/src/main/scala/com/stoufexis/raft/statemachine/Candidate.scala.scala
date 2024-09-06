@@ -12,6 +12,45 @@ import com.stoufexis.raft.typeclass.IntLike.*
 
 import scala.concurrent.duration.FiniteDuration
 
+def handleIncomingAppends[F[_], A, S](
+  state: NodeInfo[S]
+)(using
+  F:      MonadThrow[F],
+  rpc:    RPC[F, A, S],
+  logger: Logger[F]
+): Stream[F, NodeInfo[S]] =
+  rpc.incomingAppends.evalMapFirstSome:
+    case IncomingAppend(req, sink) if state.isExpired(req.term) =>
+      req.termExpired(state, sink) as None
+
+    /** Someone else got elected before us. Recognise them. Append will be handled when transitioned to
+      * follower. Incoming term may be current or a larger one, we always transition to follower.
+      */
+    case IncomingAppend(req, sink) =>
+      F.pure(Some(state.toFollower(req.term)))
+
+def handleIncomingVotes[F[_], A, S](
+  state: NodeInfo[S]
+)(using
+  F:      MonadThrow[F],
+  rpc:    RPC[F, A, S],
+  logger: Logger[F]
+): Stream[F, NodeInfo[S]] =
+  rpc.incomingVotes.evalMapFirstSome:
+    case IncomingVote(req, sink) if state.isExpired(req.term) =>
+      req.termExpired(state, sink) as None
+
+    /** We have voted for ourselves this term, as we are a candidate.
+      */
+    case IncomingVote(req, sink) if state.isCurrent(req.term) =>
+      req.reject(sink) as None
+
+    /** Vote request for next term. Our term has expired, vote for the other candidate. Request will be
+      * fulfilled when transitioned to follower.
+      */
+    case IncomingVote(req, sink) =>
+      F.pure(Some(state.toVotedFollower(req.candidateId, req.term)))
+
 def solicitVotes[F[_], A, S](
   state:           NodeInfo[S],
   electionTimeout: FiniteDuration
