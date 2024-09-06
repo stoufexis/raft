@@ -21,25 +21,15 @@ object Candidate:
     timeout: Timeout[F],
     logger:  Logger[F]
   ): Stream[F, NodeInfo[S]] =
-    for
-      electionTimeout: FiniteDuration <-
-        Stream.eval(timeout.nextElectionTimeout)
-
-      handleAppends: Stream[F, NodeInfo[S]] =
-        handleIncomingAppends(state)
-
-      handleVotes: Stream[F, NodeInfo[S]] =
-        handleIncomingVotes(state)
-
-      handleClient: Stream[F, Nothing] =
-        handleClientRequests(state)
-
-      solicit: Stream[F, NodeInfo[S]] =
-        solicitVotes(state, electionTimeout)
-
-      out: NodeInfo[S] <-
-        raceFirst(List(handleAppends, handleVotes, handleClient, solicit))
-    yield out
+    Stream
+      .eval(timeout.nextElectionTimeout)
+      .flatMap: electionTimeout =>
+        raceFirst(
+          handleIncomingAppends(state),
+          handleIncomingVotes(state),
+          handleClientRequests(state),
+          solicitVotes(state, electionTimeout)
+        )
 
   def handleClientRequests[F[_], A, S](state: NodeInfo[S])(using rpc: RPC[F, A, S]): Stream[F, Nothing] =
     rpc

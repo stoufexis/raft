@@ -127,6 +127,9 @@ def raceFirst[F[_]: Concurrent, A](streams: List[Stream[F, A]]): Stream[F, A] =
     .parJoinUnbounded
     .head
 
+def raceFirst[F[_]: Concurrent, A](head: Stream[F, A], tail: Stream[F, A]*): Stream[F, A] =
+  raceFirst(head :: List(tail*))
+
 def raceFirstOrError[F[_]: Concurrent, A](streams: List[Stream[F, A]]): F[A] =
   raceFirst(streams)
     .compile

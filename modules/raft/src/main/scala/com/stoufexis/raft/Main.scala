@@ -1,26 +1,19 @@
 package com.stoufexis.raft
 
 import cats.effect.*
-// import cats.effect.std.Mutex
-// import cats.effect.std.Queue
-// import cats.effect.std.Semaphore
-// import cats.implicits.given
-// import fs2.*
-// import fs2.grpc.syntax.all.*
-// import io.grpc.ManagedChannel
-import io.grpc.Metadata
-// import io.grpc.ServerServiceDefinition
-// import io.grpc.netty.shaded.io.grpc.netty.*
+import cats.effect.std.*
+import cats.implicits.given
+import fs2.*
+import fs2.grpc.syntax.all.*
+import io.grpc.*
+import io.grpc.netty.shaded.io.grpc.netty.*
 
-// import com.stoufexis.leader.proto.protos.*
-// import com.stoufexis.leader.rpc.RequestQueue.Unprocessed
-
-// import scala.annotation.unused
-// import scala.collection.immutable.HashMap
-// import scala.collection.mutable.ArrayBuilder
-// import scala.concurrent.duration.*
-// import com.google.protobuf.struct.Struct
-// import scalapb.grpc.ProtoInputStream
+import scala.annotation.unused
+import scala.collection.immutable.HashMap
+import scala.collection.mutable.ArrayBuilder
+import scala.concurrent.duration.*
+import com.google.protobuf.struct.Struct
+import scalapb.grpc.ProtoInputStream
 import com.stoufexis.raft.proto.protos.*
 
 /*
@@ -111,7 +104,7 @@ import com.stoufexis.raft.proto.protos.*
 // val runServer: Resource[IO, Unit] =
 //   for
 //     service: ServerServiceDefinition <-
-//       PingerFs2Grpc.bindServiceResource[IO](new PingerServiceImpl)
+//       PingerFs2Grpc.bindServiceResource[IO](???)
 
 //     _ <-
 //       NettyServerBuilder
