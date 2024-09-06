@@ -8,7 +8,11 @@ import com.stoufexis.raft.model.NodeId
   * cluster, so only known NodeIds.
   */
 trait RPC[F[_], A, S]:
+  // Repeats on transient errors
   def appendEntries(node: NodeId, request: AppendEntries[A]): F[AppendResponse]
+
+  // Repeats on transient errors
+  def requestVote(node: NodeId, request: RequestVote): F[VoteResponse]
 
   def incomingVotes: Stream[F, IncomingVote[F]]
 

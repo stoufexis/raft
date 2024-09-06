@@ -65,7 +65,7 @@ object Follower:
     rpc:    RPC[F, A, S],
     logger: Logger[F]
   ): Stream[F, NodeInfo[S]] =
-    rpc.incomingVotes.evalMapFilter:
+    rpc.incomingVotes.evalMapFirstSome:
       case IncomingVote(req, sink) if state.isExpired(req.term) =>
         req.termExpired(state, sink) as None
 

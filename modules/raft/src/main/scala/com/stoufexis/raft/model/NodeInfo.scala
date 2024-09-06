@@ -41,6 +41,9 @@ case class NodeInfo[S](
   def toCandidateNextTerm: NodeInfo[S] =
     transition(Role.Candidate, term + 1)
 
+  def toLeader: NodeInfo[S] =
+    transition(Role.Leader)
+
   def newTerm(term: Term): NodeInfo[S] =
     copy(term = term)
 

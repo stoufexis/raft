@@ -74,34 +74,33 @@ extension [F[_], A](stream: Stream[F, A])
     stream.map(Left(_)).mergeHaltBoth(that.map(Right(_)))
 
   // TODO: Test
+  // Terminates after first output
   def resettableTimeoutAccumulate[S, B](
     init:      S,
     timeout:   FiniteDuration,
     onTimeout: F[B]
   )(f: (S, A) => (S, F[Unit], ResettableTimeout[B]))(using Temporal[F]): Stream[F, B] =
     def go(leftover: Chunk[A], timed: Pull.Timed[F, A], s: S): Pull[F, B, Unit] =
-      val reset: Pull[F, Nothing, Unit] = timed.timeout(timeout)
+      if leftover.nonEmpty then
+        f(s, leftover.head.get) match
+          case (_, fu, ResettableTimeout.Output(out)) =>
+            Pull.output1(out) >> Pull.eval(fu) >> Pull.done
 
-      leftover match
-        case chunk if chunk.nonEmpty =>
-          for
-            (s2, fu, res) <- Pull.pure(f(s, chunk.head.get))
-            _             <- res.fold(reset, Pull.pure(()), x => reset >> Pull.output1(x))
-            _             <- Pull.eval(fu)
-            _             <- go(chunk.drop(1), timed, s2)
-          yield ()
+          case (s2, fu, ResettableTimeout.Reset()) =>
+            timed.timeout(timeout) >> Pull.eval(fu) >> go(leftover.drop(1), timed, s2)
 
-        case chunk =>
-          timed.uncons.flatMap:
-            case None =>
-              Pull.done
+          case (s2, fu, ResettableTimeout.Skip()) =>
+            Pull.eval(fu) >> go(leftover.drop(1), timed, s2)
+      else
+        timed.uncons.flatMap:
+          case None =>
+            Pull.done
 
-            case Some((Right(chunk), next)) =>
-              go(chunk, next, s)
+          case Some((Right(chunk), next)) =>
+            go(chunk, next, s)
 
-            case Some((Left(_), next)) =>
-              Pull.eval(onTimeout).flatMap: b =>
-                Pull.output1(b) >> reset >> go(Chunk.empty, next, s)
+          case Some((Left(_), next)) =>
+            Pull.eval(onTimeout).flatMap(Pull.output1(_)) >> Pull.done
     end go
 
     stream.pull
@@ -113,6 +112,9 @@ extension [F[_], A](stream: Stream[F, A])
     onTimeout: F[B]
   )(f: A => (F[Unit], ResettableTimeout[B]))(using Temporal[F]): Stream[F, B] =
     resettableTimeoutAccumulate((), timeout, onTimeout)((_, a) => () *: f(a))
+
+  def evalMapFirstSome[B](f: A => F[Option[B]]): Stream[F, B] =
+    stream.evalMapFilter(f).head
 
   def evalMapFilterAccumulate[S, B](init: S)(f: (S, A) => F[(S, Option[B])]): Stream[F, B] =
     stream.evalMapAccumulate(init)(f).mapFilter(_._2)

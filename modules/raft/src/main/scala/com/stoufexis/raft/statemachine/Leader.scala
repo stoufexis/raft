@@ -78,7 +78,7 @@ object Leader:
     rpc:    RPC[F, A, S],
     logger: Logger[F]
   ): Stream[F, NodeInfo[S]] =
-    rpc.incomingVotes.evalMapFilter:
+    rpc.incomingVotes.evalMapFirstSome:
       case IncomingVote(req, sink) if state.isExpired(req.term) =>
         req.termExpired(state, sink) as None
 
@@ -98,7 +98,7 @@ object Leader:
     rpc:    RPC[F, A, S],
     logger: Logger[F]
   ): Stream[F, NodeInfo[S]] =
-    rpc.incomingAppends.evalMapFilter:
+    rpc.incomingAppends.evalMapFirstSome:
       case IncomingAppend(req, sink) if state.isExpired(req.term) =>
         req.termExpired(state, sink) as None
 
@@ -306,3 +306,4 @@ object Leader:
       .dropping(1)
       .repeatLast(heartbeatEvery)
       .evalMapFilterAccumulate(Option.empty[Index])(send(_, _))
+      .head
