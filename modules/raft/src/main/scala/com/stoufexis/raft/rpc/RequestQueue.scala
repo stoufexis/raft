@@ -21,8 +21,8 @@ trait RequestQueue[F[_], I, O]:
   def consume: Stream[F, (I, DeferredSink[F, O])]
 
   /** Offers most of the time succeed in a FIFO order, but if an offer has to wait for room, there are
-    * race conditions that make this not 100% guaranteed all of the time. This is not handled by the
-    * RequestQueue, since it is overhead thats not necessary for most use cases.
+    * race conditions that make this not 100% guaranteed all of the time. This guarantee is not provided by the
+    * RequestQueue, since its implementation would be overhead thats not necessary for our use cases.
     *
     * If you want to guarantee the order of 2 offers, you have to do one of the following:
     *   - wait for the first one to finish before calling the second one
