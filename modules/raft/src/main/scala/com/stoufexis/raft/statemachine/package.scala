@@ -116,6 +116,9 @@ extension [F[_], A](stream: Stream[F, A])
   def evalMapFirstSome[B](f: A => F[Option[B]]): Stream[F, B] =
     stream.evalMapFilter(f).head
 
+  def evalMapAccumulateFirstSome[S, B](init: S)(f: (S, A) => F[(S, Option[B])]): Stream[F, B] =
+    stream.evalMapFilterAccumulate(init)(f).head
+
   def evalMapFilterAccumulate[S, B](init: S)(f: (S, A) => F[(S, Option[B])]): Stream[F, B] =
     stream.evalMapAccumulate(init)(f).mapFilter(_._2)
 

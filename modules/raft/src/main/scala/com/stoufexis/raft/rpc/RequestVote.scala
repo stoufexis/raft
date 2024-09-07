@@ -2,4 +2,9 @@ package com.stoufexis.raft.rpc
 
 import com.stoufexis.raft.model.*
 
-case class RequestVote(candidateId: NodeId, term: Term)
+case class RequestVote(
+  candidateId:  NodeId,
+  term:         Term,
+  lastLogIndex: Index,
+  lastLogTerm:  Term
+)

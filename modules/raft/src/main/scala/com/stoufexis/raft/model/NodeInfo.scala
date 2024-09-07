@@ -22,19 +22,16 @@ case class NodeInfo[S](
     (nodes intersect allNodes).size >= majorityCnt
 
   def toFollower(newTerm: Term, leaderId: NodeId): NodeInfo[S] =
-    copy(role = Role.Follower(None), term = newTerm, knownLeader = Some(leaderId))
+    copy(role = Role.Follower, term = newTerm, knownLeader = Some(leaderId))
 
   def toFollower(leaderId: NodeId): NodeInfo[S] =
-    copy(role = Role.Follower(None), knownLeader = Some(leaderId))
+    copy(role = Role.Follower, knownLeader = Some(leaderId))
 
   def toFollowerUnknownLeader(newTerm: Term): NodeInfo[S] =
-    copy(role = Role.Follower(None), term = newTerm, knownLeader = None)
+    copy(role = Role.Follower, term = newTerm, knownLeader = None)
 
   def toFollowerUnknownLeader: NodeInfo[S] =
-    copy(role = Role.Follower(None), knownLeader = None)
-
-  def toVotedFollower(candidateId: NodeId, newTerm: Term): NodeInfo[S] =
-    copy(role = Role.Follower(Some(candidateId)), term = newTerm)
+    copy(role = Role.Follower, knownLeader = None)
 
   def toCandidateNextTerm: NodeInfo[S] =
     copy(role = Role.Candidate, term = term + 1)
@@ -56,9 +53,3 @@ case class NodeInfo[S](
 
   def isLeader(node: NodeId): Boolean =
     knownLeader.exists(_ == node)
-
-  def votedFor(candidateId: NodeId): Boolean =
-    role match
-      case Role.Follower(vfor) => vfor.exists(_ == candidateId)
-      case Role.Candidate      => candidateId == currentNode
-      case Role.Leader         => candidateId == currentNode

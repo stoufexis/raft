@@ -85,11 +85,11 @@ object Leader:
       case IncomingVote(req, sink) if state.isCurrent(req.term) =>
         req.reject(sink) as None
 
-      /** This leader is being superseeded. As with the handleAppends transition, want until the
+      /** This leader is being superseeded. As with the handleAppends transition, wait until the
         * transition has happened to grant.
         */
       case IncomingVote(req, sink) =>
-        F.pure(Some(state.toVotedFollower(req.candidateId, req.term)))
+        F.pure(Some(state.toFollowerUnknownLeader(req.term)))
 
   def handleIncomingAppends[F[_], A, S](
     state: NodeInfo[S]

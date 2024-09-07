@@ -52,7 +52,8 @@ object Follower:
       case IncomingAppend(req, sink) if state.isCurrent(req.term) && state.isLeader(req.leaderId) =>
         log
           .appendChunkIfMatches(req.prevLogTerm, req.prevLogIndex, req.term, req.entries)
-          .ifM(req.accepted(sink), req.inconsistent(sink)) -> ResettableTimeout.Reset()
+          .ifM(req.accepted(sink), req.inconsistent(sink))
+          .->(ResettableTimeout.Reset())
 
       /** Let the request be fulfilled after we transition
         */
@@ -66,21 +67,27 @@ object Follower:
     rpc:    RPC[F, A, S],
     logger: Logger[F]
   ): Stream[F, NodeInfo[S]] =
-    rpc.incomingVotes.evalMapFirstSome:
-      case IncomingVote(req, sink) if state.isExpired(req.term) =>
-        req.termExpired(state, sink) as None
+    rpc.incomingVotes.evalMapAccumulateFirstSome(Option.empty[NodeId]):
+      case (votedFor, IncomingVote(req, sink)) if state.isExpired(req.term) =>
+        req.termExpired(state, sink) as (votedFor, None)
 
-      /** This candidate has our vote already, grant again. This case is expected because we wait for
-        * after the transition to grant a vote, so this request is being carried over from before the
-        * transition. Our response may also have been lost for whatever reason.
+      /** This candidate has our vote already, grant again.
         */
-      case IncomingVote(req, sink) if state.isCurrent(req.term) && state.votedFor(req.candidateId) =>
-        req.grant(sink) as None
+      case (Some(vf), IncomingVote(req, sink)) if state.isCurrent(req.term) && vf == req.candidateId =>
+        req.grant(sink) as (Some(vf), None)
 
-      case IncomingVote(req, sink) if state.isCurrent(req.term) =>
-        req.reject(sink) as None
+      /** We voted for someone else already.
+        */
+      case (Some(vf), IncomingVote(req, sink)) if state.isCurrent(req.term) =>
+        req.reject(sink) as (Some(vf), None)
+
+      /**
+        * This candidate requested a vote first, grant it.
+        */
+      case (None, IncomingVote(req, sink)) if state.isCurrent(req.term) =>
+        req.grant(sink) as (Some(req.candidateId), None)
 
       /** Election for new term. Vote after the transition.
         */
-      case IncomingVote(req, sink) =>
-        F.pure(Some(state.toVotedFollower(req.candidateId, req.term)))
+      case (vf, IncomingVote(req, sink)) =>
+        F.pure(vf, Some(state.toFollowerUnknownLeader(req.term)))

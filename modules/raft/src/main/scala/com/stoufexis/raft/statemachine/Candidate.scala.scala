@@ -70,11 +70,12 @@ object Candidate:
       case IncomingVote(req, sink) if state.isCurrent(req.term) =>
         req.reject(sink) as None
 
-      /** Vote request for next term. Our term has expired, vote for the other candidate. Request will be
-        * fulfilled when transitioned to follower.
+      /** Vote request for next term. Our term has expired, transition to follower. When we are in a
+        * follower status, we can evaluate if this candidate is fit to be leader, by gauging how up to
+        * date its log is.
         */
       case IncomingVote(req, sink) =>
-        F.pure(Some(state.toVotedFollower(req.candidateId, req.term)))
+        F.pure(Some(state.toFollowerUnknownLeader(req.term)))
 
   def solicitVotes[F[_], A, S](
     state:           NodeInfo[S],
@@ -88,7 +89,7 @@ object Candidate:
 
     val responses: Stream[F, (NodeId, VoteResponse)] =
       Stream.iterable(state.otherNodes).parEvalMapUnbounded: node =>
-        rpc.requestVote(node, RequestVote(state.currentNode, state.term))
+        rpc.requestVote(node, RequestVote(state.currentNode, state.term, ???, ???))
           .tupleLeft(node)
 
     responses.resettableTimeoutAccumulate(
