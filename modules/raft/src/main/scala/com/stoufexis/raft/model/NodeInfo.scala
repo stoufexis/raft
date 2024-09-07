@@ -53,3 +53,6 @@ case class NodeInfo[S](
 
   def isLeader(node: NodeId): Boolean =
     knownLeader.exists(_ == node)
+
+  def isCurrentLeader(otherTerm: Term, node: NodeId): Boolean =
+    isCurrent(otherTerm) && isLeader(node)

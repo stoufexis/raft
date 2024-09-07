@@ -21,15 +21,21 @@ object Candidate:
     timeout: Timeout[F],
     logger:  Logger[F]
   ): Stream[F, NodeInfo[S]] =
-    Stream
-      .eval(timeout.nextElectionTimeout)
-      .flatMap: electionTimeout =>
+    for
+      electionTimeout <-
+        Stream.eval(timeout.nextElectionTimeout)
+
+      (lastLogTerm: Term, lastLogIdx: Index) <-
+        Stream.eval(log.lastTermIndex)
+
+      out: NodeInfo[S] <-
         raceFirst(
           handleIncomingAppends(state),
           handleIncomingVotes(state),
           handleClientRequests(state),
-          solicitVotes(state, electionTimeout)
+          solicitVotes(state, electionTimeout, lastLogIdx, lastLogTerm)
         )
+    yield out
 
   def handleClientRequests[F[_], A, S](state: NodeInfo[S])(using rpc: RPC[F, A, S]): Stream[F, Nothing] =
     rpc
@@ -70,16 +76,20 @@ object Candidate:
       case IncomingVote(req, sink) if state.isCurrent(req.term) =>
         req.reject(sink) as None
 
-      /** Vote request for next term. Our term has expired, transition to follower. When we are in a
-        * follower status, we can evaluate if this candidate is fit to be leader, by gauging how up to
-        * date its log is.
+      /** Vote request for next term. Our term has expired, transition to follower. When we are in a follower
+        * status, we can evaluate if this candidate is fit to be leader, by gauging how up to date its log is.
         */
       case IncomingVote(req, sink) =>
         F.pure(Some(state.toFollowerUnknownLeader(req.term)))
 
+  /** No appends happen in this state, so we can always use the last idx and term found in the log for the
+    * election.
+    */
   def solicitVotes[F[_], A, S](
     state:           NodeInfo[S],
-    electionTimeout: FiniteDuration
+    electionTimeout: FiniteDuration,
+    lastLogIdx:      Index,
+    lastLogTerm:     Term
   )(using
     F:   Temporal[F],
     log: Logger[F],
@@ -89,7 +99,7 @@ object Candidate:
 
     val responses: Stream[F, (NodeId, VoteResponse)] =
       Stream.iterable(state.otherNodes).parEvalMapUnbounded: node =>
-        rpc.requestVote(node, RequestVote(state.currentNode, state.term, ???, ???))
+        rpc.requestVote(node, RequestVote(state.currentNode, state.term, lastLogIdx, lastLogTerm))
           .tupleLeft(node)
 
     responses.resettableTimeoutAccumulate(
@@ -108,15 +118,15 @@ object Candidate:
           log.info(s"Majority votes collected")
 
         if state.isMajority(newNodes) then
-          (newNodes, success, Output(state.toLeader))
+          (success as newNodes, Output(state.toLeader))
         else
-          (newNodes, voted, Skip())
+          (voted as newNodes, Skip())
 
       case (nodes, (node, VoteResponse.Rejected)) =>
-        (nodes, log.info(s"Node $node rejected vote"), Skip())
+        (log.info(s"Node $node rejected vote") as nodes, Skip())
 
       case (nodes, (_, VoteResponse.TermExpired(newTerm))) =>
-        (nodes, log.warn(s"Detected stale term"), Output(state.toFollowerUnknownLeader(newTerm)))
+        (log.warn(s"Detected stale term") as nodes, Output(state.toFollowerUnknownLeader(newTerm)))
 
       case (nodes, (_, VoteResponse.IllegalState(msg))) =>
-        (nodes, F.raiseError(IllegalStateException(msg)), Skip())
+        (F.raiseError(IllegalStateException(msg)), Skip())

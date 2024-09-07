@@ -15,15 +15,15 @@ import scala.concurrent.duration.FiniteDuration
 
 object Leader:
 
-  /** Linearizability of reads is implemented quite inefficiently right now. A read is inserted as a
-    * special entry in the log, and the read returns to the client only after the special entry is marked
-    * as committed. Section "6.4 Processing read-only queries more efficiently" of the [Raft
+  /** Linearizability of reads is implemented quite inefficiently right now. A read is inserted as a special
+    * entry in the log, and the read returns to the client only after the special entry is marked as
+    * committed. Section "6.4 Processing read-only queries more efficiently" of the [Raft
     * paper](https://github.com/ongardie/dissertation#readme) explains a more efficient implementation.
     * Implementing the efficient algorithm is left as a future effort.
     *
     * This implementation of raft only updates the state machine in the leader node. Other nodes simply
-    * replicate the log. The state machine in other nodes is reconstructed from the log if they become
-    * the leader. TODO: I think this means I can get rid of the leaderCommit in AppendEntries requests
+    * replicate the log. The state machine in other nodes is reconstructed from the log if they become the
+    * leader. TODO: I think this means I can get rid of the leaderCommit in AppendEntries requests
     */
   def apply[F[_], A, S: Monoid](
     state:          NodeInfo[S],
@@ -85,8 +85,8 @@ object Leader:
       case IncomingVote(req, sink) if state.isCurrent(req.term) =>
         req.reject(sink) as None
 
-      /** This leader is being superseeded. As with the handleAppends transition, wait until the
-        * transition has happened to grant.
+      /** This leader is being superseeded. As with the handleAppends transition, wait until the transition
+        * has happened to grant.
         */
       case IncomingVote(req, sink) =>
         F.pure(Some(state.toFollowerUnknownLeader(req.term)))
@@ -105,29 +105,28 @@ object Leader:
       case IncomingAppend(req, sink) if state.isCurrent(req.term) =>
         req.duplicateLeaders(sink) // throws error, it should impossible to reach this
 
-      /** newer leader detected. Dont respond to the request, let it be consumed when we have
-        * transitioned to follower. This ensures that the response happens only after this transition has
-        * taken place. Otherwise, there is a chance that a different transition will happen instead even
-        * after responding. This is a race condition caused by the parJoin of potentially
-        * transition-producing streams.
+      /** newer leader detected. Dont respond to the request, let it be consumed when we have transitioned to
+        * follower. This ensures that the response happens only after this transition has taken place.
+        * Otherwise, there is a chance that a different transition will happen instead even after responding.
+        * This is a race condition caused by the parJoin of potentially transition-producing streams.
         */
       case IncomingAppend(req, sink) =>
         F.pure(Some(state.toFollower(req.term, req.leaderId)))
 
-  /** Receives client requests and fulfills them. Every request's entries are immediatelly appended to
-    * the local log and we attempt to commit them. A commit is initiated by informing the appenders of a
-    * new uncommitted index, via a publish to the newIdxs topic. The appenders attempt to append all
-    * entries that are missing in the follower nodes, up to the new idx. Each time an index is confirmed
-    * to be replicated in a follower node, a new event is emitted on the matchIdxs topic by the appender.
-    * When the majority of the cluster (including the leader) has stored an entry of a given index, we
-    * mark that index as committed.
+  /** Receives client requests and fulfills them. Every request's entries are immediatelly appended to the
+    * local log and we attempt to commit them. A commit is initiated by informing the appenders of a new
+    * uncommitted index, via a publish to the newIdxs topic. The appenders attempt to append all entries that
+    * are missing in the follower nodes, up to the new idx. Each time an index is confirmed to be replicated
+    * in a follower node, a new event is emitted on the matchIdxs topic by the appender. When the majority of
+    * the cluster (including the leader) has stored an entry of a given index, we mark that index as
+    * committed.
     *
-    * Whenever an index is marked as committed, we can fulfill any client request that appended entries
-    * with a final index at or bellow the new committed index. Fulfilling happends by applying the
-    * entries to the state machine and responding to the client with the new state.
+    * Whenever an index is marked as committed, we can fulfill any client request that appended entries with a
+    * final index at or bellow the new committed index. Fulfilling happends by applying the entries to the
+    * state machine and responding to the client with the new state.
     *
-    * A bound on the number of concurrent waiting clients is not enforced here. Such a bound must be
-    * enforced upstream, in incomingClientRequests.
+    * A bound on the number of concurrent waiting clients is not enforced here. Such a bound must be enforced
+    * upstream, in incomingClientRequests.
     */
   def stateMachine[F[_], A, S](
     state:     NodeInfo[S],
@@ -185,9 +184,9 @@ object Leader:
           _      <- newIdxs.publish(newIdx)
         yield (clients.enqueue(idxEnd + 1, newIdx, req.sink), newIdx, s)
 
-  /** If the majority of the cluster is not reached with any request for an electionTimeout, demote self
-    * to follower. This makes sure that a partitioned leader will quickly stop acting as a leader, even
-    * if it does not notice another leader with a higher term.
+  /** If the majority of the cluster is not reached with any request for an electionTimeout, demote self to
+    * follower. This makes sure that a partitioned leader will quickly stop acting as a leader, even if it
+    * does not notice another leader with a higher term.
     */
   def partitionChecker[F[_], S](
     state:           NodeInfo[S],
@@ -214,31 +213,30 @@ object Leader:
 
         // TODO: Unify the cluster majority related functions
         if state.isMajority(newNodes) then
-          (Set(state.currentNode), info, ResettableTimeout.Reset())
+          (info as Set(state.currentNode), ResettableTimeout.Reset())
         else
-          (newNodes, debug, ResettableTimeout.Skip())
+          (debug as newNodes, ResettableTimeout.Skip())
 
   /** Maintains a matchIndex for each node, which points to the last index in the log for which every
     * preceeding entry matches, including the matchIndex entry.
     *
-    * If there is a new uncommitted index, it attempts to send the uncommitted records to the node. If
-    * the node returns a NotConsistent, we attempt to find the largest index for which the logs match, by
-    * entering seek mode. Seek mode means repeatedly sending empty AppendEntries requests, each time
-    * decreasing the matchIndex by 1, until an Accepted response is returned, which means we have found
-    * the first log entry for which the logs match. After we have found that index, we exit seek mode and
-    * attempt to replicate to the node all the leaders entries starting at that index, overwritting any
-    * entries the node has that the leader does not agree with.
+    * If there is a new uncommitted index, it attempts to send the uncommitted records to the node. If the
+    * node returns a NotConsistent, we attempt to find the largest index for which the logs match, by entering
+    * seek mode. Seek mode means repeatedly sending empty AppendEntries requests, each time decreasing the
+    * matchIndex by 1, until an Accepted response is returned, which means we have found the first log entry
+    * for which the logs match. After we have found that index, we exit seek mode and attempt to replicate to
+    * the node all the leaders entries starting at that index, overwritting any entries the node has that the
+    * leader does not agree with.
     *
     * If there is no new uncommitted index and heartbeatEvery time has passed, we emit a heartbeat, ie an
-    * AppendEntries with no entries. The heartbeat may also fail the consistency check, in which case we
-    * enter seek mode.
+    * AppendEntries with no entries. The heartbeat may also fail the consistency check, in which case we enter
+    * seek mode.
     *
     * If we encounter a TermExpired, we emit a new state, which signals the upstream for this stream's
     * termination. In all other cases nothing is emitted.
     *
-    * Whenever a node responds to an rpc request, we know that we are not partitioned from it, so we
-    * re-emit the latest matchIdx in the matchIdxs topic. This keeps the partition checker from timing
-    * out.
+    * Whenever a node responds to an rpc request, we know that we are not partitioned from it, so we re-emit
+    * the latest matchIdx in the matchIdxs topic. This keeps the partition checker from timing out.
     */
   def appender[F[_], A, S](
     state:          NodeInfo[S],

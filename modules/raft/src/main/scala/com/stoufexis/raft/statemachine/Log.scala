@@ -15,13 +15,15 @@ trait Log[F[_], A]:
     prevLogIndex: Index,
     term:         Term,
     entries:      Chunk[A]
-  ): F[Boolean]
+  ): F[Option[Index]]
 
   /** Inclusive range
     */
   def range(from: Index, until: Index): F[(Term, Chunk[A])]
 
   def readAll: Stream[F, (Index, A)]
+
+  def lastTermIndex: F[(Term, Index)]
 
   def readRange(from: Index, until: Index): Stream[F, A]
 
