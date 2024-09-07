@@ -209,9 +209,9 @@ object Leader:
 
         // TODO: Unify the cluster majority related functions
         if state.isMajority(newNodes) then
-          (info as Set(state.currentNode), ResettableTimeout.Reset())
+          ResettableTimeout.Reset(info as Set(state.currentNode))
         else
-          (debug as newNodes, ResettableTimeout.Skip())
+          ResettableTimeout.Skip(debug as newNodes)
 
   /** Maintains a matchIndex for each node, which points to the last index in the log for which every
     * preceeding entry matches, including the matchIndex entry.

@@ -36,7 +36,7 @@ lazy val proto =
     .in(file("modules/proto"))
     .enablePlugins(Fs2Grpc)
     .settings(
-      libraryDependencies ++= grpc,
+      libraryDependencies ++= grpc
     )
 
 lazy val raft =

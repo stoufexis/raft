@@ -4,9 +4,6 @@ import cats.effect.*
 import cats.effect.std.*
 import cats.implicits.given
 import fs2.*
-import fs2.grpc.syntax.all.*
-import io.grpc.*
-import io.grpc.netty.shaded.io.grpc.netty.*
 
 import scala.annotation.unused
 import scala.collection.immutable.HashMap

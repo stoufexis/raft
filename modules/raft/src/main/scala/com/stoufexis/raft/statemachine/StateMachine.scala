@@ -5,6 +5,7 @@ import cats.effect.implicits.given
 import cats.effect.kernel.*
 import cats.implicits.given
 import fs2.*
+import fs2.io.file.*
 import fs2.concurrent.Channel
 import org.typelevel.log4cats.Logger
 
@@ -33,7 +34,7 @@ object StateMachine:
           case Role.Candidate => Resource.eval(Candidate(st))
           case Role.Leader    => Leader(st, heartbeatEvery, automaton)
 
-      // Works like parJoinUnbounded, but reuses the same channel
+      // Works like parJoinUnbounded, but reuses the same channel and only ever outputs 1 element
       val joined: Stream[F, NodeInfo[S]] =
         for
           fib: Fiber[F, Throwable, Unit] <- Stream.supervise:

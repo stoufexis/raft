@@ -112,15 +112,15 @@ object Candidate:
           log.info(s"Majority votes collected")
 
         if state.isMajority(newNodes) then
-          (success as newNodes, Output(state.toLeader))
+          Output(success as state.toLeader)
         else
-          (voted as newNodes, Skip())
+          Skip(voted as newNodes)
 
       case (nodes, (node, VoteResponse.Rejected)) =>
-        (log.info(s"Node $node rejected vote") as nodes, Skip())
+        Skip(log.info(s"Node $node rejected vote") as nodes)
 
       case (nodes, (_, VoteResponse.TermExpired(newTerm))) =>
-        (log.warn(s"Detected stale term") as nodes, Output(state.toFollowerUnknownLeader(newTerm)))
+        Output(log.warn(s"Detected stale term") as state.toFollowerUnknownLeader(newTerm))
 
       case (nodes, (_, VoteResponse.IllegalState(msg))) =>
-        (F.raiseError(IllegalStateException(msg)), Skip())
+        Skip(F.raiseError(IllegalStateException(msg)))

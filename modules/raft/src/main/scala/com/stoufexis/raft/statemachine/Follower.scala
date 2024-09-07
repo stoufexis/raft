@@ -60,7 +60,7 @@ object Follower:
     ):
       // APPENDS
       case (st, IncomingAppend(req, sink)) if state.isExpired(req.term) =>
-        (req.termExpired(state, sink) as st, ResettableTimeout.Skip())
+        ResettableTimeout.Skip(req.termExpired(state, sink) as st)
 
       /** Append from current known leader. Fulfill it. If the leader has a larger term, or if we previously
         * did not know who the leader was, transition, so that other state machines will know about the
@@ -72,37 +72,37 @@ object Follower:
             case None       => req.inconsistent(sink) as i
             case Some(newI) => req.accepted(sink) as newI
 
-        (append.tupleLeft(vf), ResettableTimeout.Reset())
+        ResettableTimeout.Reset(append.tupleLeft(vf))
 
       case (st, IncomingAppend(req, sink)) =>
-        (F.pure(st), ResettableTimeout.Output(state.toFollower(req.term, req.leaderId)))
+        ResettableTimeout.outputPure(state.toFollower(req.term, req.leaderId))
 
       // VOTES
       case (st, IncomingVote(req, sink)) if state.isExpired(req.term) =>
-        (req.termExpired(state, sink) as st, ResettableTimeout.Skip())
+        ResettableTimeout.Skip(req.termExpired(state, sink) as st)
 
       /** This candidate has our vote already, grant again.
         */
       case (s @ (Some(f), i), IncomingVote(req, sink)) if state.isCurrent(req.term) && f == req.candidateId =>
-        (req.grant(sink) as s, ResettableTimeout.Skip())
+        ResettableTimeout.Skip(req.grant(sink) as s)
 
       /** We voted for someone else already.
         */
       case (st @ (Some(vf), i), IncomingVote(req, sink)) if state.isCurrent(req.term) =>
-        (req.reject(sink) as st, ResettableTimeout.Skip())
+        ResettableTimeout.Skip(req.reject(sink) as st)
 
       /** This candidate requested a vote first and its log is at least as advanced as ours. Grant the vote.
         */
       case ((None, i), IncomingVote(req, sink)) if state.isCurrent(req.term) && isUpToDate(i, req) =>
-        (req.grant(sink) as (Some(req.candidateId), i), ResettableTimeout.Skip())
+        ResettableTimeout.Skip(req.grant(sink) as (Some(req.candidateId), i))
 
       /** This candidate requested a vote first but its log is not at least as advanced as ours. Reject the
         * vote.
         */
       case ((None, i), IncomingVote(req, sink)) if state.isCurrent(req.term) =>
-        (req.reject(sink) as (None, i), ResettableTimeout.Skip())
+        ResettableTimeout.Skip(req.reject(sink) as (None, i))
 
       /** Election for new term. Vote after the transition.
         */
       case ((vf, i), IncomingVote(req, sink)) =>
-        (F.pure(None, i), ResettableTimeout.Output(state.toFollowerUnknownLeader(req.term)))
+        ResettableTimeout.outputPure(state.toFollowerUnknownLeader(req.term))
