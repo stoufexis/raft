@@ -21,11 +21,14 @@ object Follower:
     rpc:     RPC[F, A, S],
     timeout: Timeout[F],
     logger:  Logger[F]
-  ): F[List[Stream[F, NodeInfo[S]]]] =
+  ): F[Behaviors[F, S]] =
     for
       electionTimeout <- timeout.nextElectionTimeout
       (_, initIdx)    <- log.lastTermIndex
-    yield List(handleIncomingAppendsAndVotes(state, electionTimeout, initIdx), handleClientRequests(state))
+    yield Behaviors(
+      handleIncomingAppendsAndVotes(state, electionTimeout, initIdx),
+      handleClientRequests(state)
+    )
 
   def handleClientRequests[F[_], A, S](state: NodeInfo[S])(using rpc: RPC[F, A, S]): Stream[F, Nothing] =
     rpc

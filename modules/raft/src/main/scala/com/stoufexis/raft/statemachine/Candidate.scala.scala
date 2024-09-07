@@ -20,11 +20,11 @@ object Candidate:
     rpc:     RPC[F, A, S],
     timeout: Timeout[F],
     logger:  Logger[F]
-  ): F[List[Stream[F, NodeInfo[S]]]] =
+  ): F[Behaviors[F, S]] =
     for
       electionTimeout           <- timeout.nextElectionTimeout
       (lastLogTerm, lastLogIdx) <- log.lastTermIndex
-    yield List(
+    yield Behaviors(
       handleIncomingAppends(state),
       handleIncomingVotes(state),
       handleClientRequests(state),
@@ -91,36 +91,39 @@ object Candidate:
   ): Stream[F, NodeInfo[S]] =
     import ResettableTimeout.*
 
-    val responses: Stream[F, (NodeId, VoteResponse)] =
-      Stream.iterable(state.otherNodes).parEvalMapUnbounded: node =>
-        rpc.requestVote(node, RequestVote(state.currentNode, state.term, lastLogIdx, lastLogTerm))
-          .tupleLeft(node)
+    def req(node: NodeId): F[(NodeId, VoteResponse)] =
+      rpc
+        .requestVote(node, RequestVote(state.currentNode, state.term, lastLogIdx, lastLogTerm))
+        .tupleLeft(node)
 
-    responses.resettableTimeoutAccumulate(
-      init      = Set(state.currentNode),
-      onTimeout = F.pure(state.toCandidateNextTerm),
-      timeout   = electionTimeout
-    ):
-      case (nodes, (node, VoteResponse.Granted)) =>
-        val newNodes: Set[NodeId] =
-          nodes + node
+    Stream
+      .iterable(state.otherNodes)
+      .parEvalMapUnbounded(req)
+      .resettableTimeoutAccumulate(
+        init      = Set(state.currentNode),
+        onTimeout = F.pure(state.toCandidateNextTerm),
+        timeout   = electionTimeout
+      ):
+        case (nodes, (node, VoteResponse.Granted)) =>
+          val newNodes: Set[NodeId] =
+            nodes + node
 
-        val voted: F[Unit] =
-          log.info(s"Node $node granted vote")
+          val voted: F[Unit] =
+            log.info(s"Node $node granted vote")
 
-        val success: F[Unit] =
-          log.info(s"Majority votes collected")
+          val success: F[Unit] =
+            log.info(s"Majority votes collected")
 
-        if state.isMajority(newNodes) then
-          Output(success as state.toLeader)
-        else
-          Skip(voted as newNodes)
+          if state.isMajority(newNodes) then
+            Output(success as state.toLeader)
+          else
+            Skip(voted as newNodes)
 
-      case (nodes, (node, VoteResponse.Rejected)) =>
-        Skip(log.info(s"Node $node rejected vote") as nodes)
+        case (nodes, (node, VoteResponse.Rejected)) =>
+          Skip(log.info(s"Node $node rejected vote") as nodes)
 
-      case (nodes, (_, VoteResponse.TermExpired(newTerm))) =>
-        Output(log.warn(s"Detected stale term") as state.toFollowerUnknownLeader(newTerm))
+        case (nodes, (_, VoteResponse.TermExpired(newTerm))) =>
+          Output(log.warn(s"Detected stale term") as state.toFollowerUnknownLeader(newTerm))
 
-      case (nodes, (_, VoteResponse.IllegalState(msg))) =>
-        Skip(F.raiseError(IllegalStateException(msg)))
+        case (nodes, (_, VoteResponse.IllegalState(msg))) =>
+          Skip(F.raiseError(IllegalStateException(msg)))

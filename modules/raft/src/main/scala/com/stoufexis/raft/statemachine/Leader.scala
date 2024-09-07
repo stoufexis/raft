@@ -14,7 +14,6 @@ import scala.collection.immutable.Queue
 import scala.concurrent.duration.FiniteDuration
 
 object Leader:
-
   /** Linearizability of reads is implemented quite inefficiently right now. A read is inserted as a special
     * entry in the log, and the read returns to the client only after the special entry is marked as
     * committed. Section "6.4 Processing read-only queries more efficiently" of the [Raft
@@ -35,7 +34,7 @@ object Leader:
     rpc:     RPC[F, A, S],
     timeout: Timeout[F],
     logger:  Logger[F]
-  ): Resource[F, List[Stream[F, NodeInfo[S]]]] =
+  ): Resource[F, Behaviors[F, S]] =
     for
       // Closes the topics after a single NodeInfo[S] is produced
       // Closing the topics interrupts subscribers and makes publishes no-ops
@@ -68,7 +67,7 @@ object Leader:
           .allNodes
           .toList
           .map(appender(state, _, newIdxs, matchIdxs, heartbeatEvery))
-    yield handleIncomingAppends(state) :: handleIncomingVotes(state) :: checker :: sm :: appenders
+    yield Behaviors(handleIncomingAppends(state) :: handleIncomingVotes(state) :: checker :: sm :: appenders)
 
   def handleIncomingVotes[F[_], A, S](
     state: NodeInfo[S]

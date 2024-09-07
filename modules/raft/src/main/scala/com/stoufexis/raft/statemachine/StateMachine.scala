@@ -1,11 +1,9 @@
 package com.stoufexis.raft.statemachine
 
 import cats.*
-import cats.effect.implicits.given
 import cats.effect.kernel.*
 import cats.implicits.given
 import fs2.*
-import fs2.io.file.*
 import fs2.concurrent.Channel
 import org.typelevel.log4cats.Logger
 
@@ -28,7 +26,7 @@ object StateMachine:
     Timeout[F]
   ): F[Nothing] =
     def go(st: NodeInfo[S], chan: Channel[F, NodeInfo[S]]): Stream[F, Nothing] =
-      val streams: Resource[F, List[Stream[F, NodeInfo[S]]]] =
+      val behaviors: Resource[F, Behaviors[F, S]] =
         st.role match
           case Role.Follower  => Resource.eval(Follower(st))
           case Role.Candidate => Resource.eval(Candidate(st))
@@ -37,8 +35,8 @@ object StateMachine:
       // Works like parJoinUnbounded, but reuses the same channel and only ever outputs 1 element
       val joined: Stream[F, NodeInfo[S]] =
         for
-          fib: Fiber[F, Throwable, Unit] <- Stream.supervise:
-            streams.use(_.parTraverse_(_.evalTap(chan.send(_).void).compile.drain))
+          fib: Fiber[F, Throwable, Unit] <-
+            Stream.supervise(behaviors.use(_.parPublish(chan)))
 
           newState: NodeInfo[S] <-
             chan.stream.head.evalTap(_ => fib.cancel)
