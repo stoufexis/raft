@@ -35,41 +35,40 @@ object Leader:
     rpc:     RPC[F, A, S],
     timeout: Timeout[F],
     logger:  Logger[F]
-  ): Stream[F, NodeInfo[S]] =
+  ): Resource[F, List[Stream[F, NodeInfo[S]]]] =
     for
       // Closes the topics after a single NodeInfo[S] is produced
       // Closing the topics interrupts subscribers and makes publishes no-ops
       // Any further writes or reads will return None
       newIdxs: CloseableTopic[F, Index] <-
-        Stream.resource(CloseableTopic[F, Index])
+        CloseableTopic[F, Index]
 
       matchIdxs: CloseableTopic[F, (NodeId, Index)] <-
-        Stream.resource(CloseableTopic[F, (NodeId, Index)])
-
-      (initIdx: Index, initState: S) <-
-        log.readAll.fold((Index.init, Monoid[S].empty)):
-          case ((_, s), (index, a)) => (index, automaton(s, a))
+        CloseableTopic[F, (NodeId, Index)]
 
       electionTimeout: FiniteDuration <-
-        Stream.eval(timeout.nextElectionTimeout)
+        Resource.eval(timeout.nextElectionTimeout)
+
+      // Send initial index to newIdxs so appenders can immediatelly start heartbeating
+      (_, i) <- Resource.eval(log.lastTermIndex)
+      _      <- Resource.eval(newIdxs.publish(i).void)
 
       checker: Stream[F, NodeInfo[S]] =
         partitionChecker(state, matchIdxs, electionTimeout)
 
       sm: Stream[F, Nothing] =
-        stateMachine(state, matchIdxs, newIdxs, initState, initIdx, automaton)
+        log
+          .readUntil(i)
+          .fold((Index.init, Monoid[S].empty)):
+            case ((_, s), (index, a)) => (index, automaton(s, a))
+          .flatMap(stateMachine(state, matchIdxs, newIdxs, _, _, automaton))
 
       appenders: List[Stream[F, NodeInfo[S]]] =
         state
           .allNodes
           .toList
           .map(appender(state, _, newIdxs, matchIdxs, heartbeatEvery))
-
-      streams: List[Stream[F, NodeInfo[S]]] =
-        handleIncomingAppends(state) :: handleIncomingVotes(state) :: checker :: sm :: appenders
-
-      out: NodeInfo[S] <- raceFirst(streams)
-    yield out
+    yield handleIncomingAppends(state) :: handleIncomingVotes(state) :: checker :: sm :: appenders
 
   def handleIncomingVotes[F[_], A, S](
     state: NodeInfo[S]
@@ -132,8 +131,8 @@ object Leader:
     state:     NodeInfo[S],
     matchIdx:  CloseableTopic[F, (NodeId, Index)],
     newIdxs:   CloseableTopic[F, Index],
-    initS:     S,
     initIdx:   Index,
+    initS:     S,
     automaton: (S, A) => S
   )(using
     F:      Temporal[F],
@@ -167,14 +166,11 @@ object Leader:
     val commitsAndAppends: Stream[F, Either[Index, IncomingClientRequest[F, A, S]]] =
       commitIdx.mergeEither(rpc.incomingClientRequests)
 
-    val startup: Stream[F, Nothing] =
-      Stream.exec(newIdxs.publish(initIdx).void)
-
     // Waiting clients in the vector are assumed to have non-overlapping and continuous indexes
     val acc: (Queue[WaitingClient], Index, S) =
       (Queue.empty, initIdx, initS)
 
-    startup ++ commitsAndAppends.evalScanDrain(acc):
+    commitsAndAppends.evalScanDrain(acc):
       case ((clients, idxEnd, s), Left(commitIdx)) =>
         fulfill(clients, commitIdx, s).map((_, idxEnd, _))
 

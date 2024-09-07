@@ -20,22 +20,16 @@ object Candidate:
     rpc:     RPC[F, A, S],
     timeout: Timeout[F],
     logger:  Logger[F]
-  ): Stream[F, NodeInfo[S]] =
+  ): F[List[Stream[F, NodeInfo[S]]]] =
     for
-      electionTimeout <-
-        Stream.eval(timeout.nextElectionTimeout)
-
-      (lastLogTerm: Term, lastLogIdx: Index) <-
-        Stream.eval(log.lastTermIndex)
-
-      out: NodeInfo[S] <-
-        raceFirst(
-          handleIncomingAppends(state),
-          handleIncomingVotes(state),
-          handleClientRequests(state),
-          solicitVotes(state, electionTimeout, lastLogIdx, lastLogTerm)
-        )
-    yield out
+      electionTimeout           <- timeout.nextElectionTimeout
+      (lastLogTerm, lastLogIdx) <- log.lastTermIndex
+    yield List(
+      handleIncomingAppends(state),
+      handleIncomingVotes(state),
+      handleClientRequests(state),
+      solicitVotes(state, electionTimeout, lastLogIdx, lastLogTerm)
+    )
 
   def handleClientRequests[F[_], A, S](state: NodeInfo[S])(using rpc: RPC[F, A, S]): Stream[F, Nothing] =
     rpc
