@@ -37,7 +37,7 @@ object StateMachine:
       val joined: Stream[F, NodeInfo[S]] =
         for
           fib: Fiber[F, Throwable, Unit] <- Stream.supervise:
-            streams.use(_.parTraverse_(_.through(chan.sendAll).compile.drain))
+            streams.use(_.parTraverse_(_.evalTap(chan.send(_).void).compile.drain))
 
           newState: NodeInfo[S] <-
             chan.stream.head.evalTap(_ => fib.cancel)
