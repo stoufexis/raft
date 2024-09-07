@@ -74,8 +74,6 @@ object Follower:
 
         (append.tupleLeft(vf), ResettableTimeout.Reset())
 
-      /** Leader from new term. Let the request be fulfilled after we transition
-        */
       case (st, IncomingAppend(req, sink)) =>
         (F.pure(st), ResettableTimeout.Output(state.toFollower(req.term, req.leaderId)))
 
@@ -106,5 +104,5 @@ object Follower:
 
       /** Election for new term. Vote after the transition.
         */
-      case (vf, IncomingVote(req, sink)) =>
-        (F.pure(vf), ResettableTimeout.Output(state.toFollowerUnknownLeader(req.term)))
+      case ((vf, i), IncomingVote(req, sink)) =>
+        (F.pure(None, i), ResettableTimeout.Output(state.toFollowerUnknownLeader(req.term)))
