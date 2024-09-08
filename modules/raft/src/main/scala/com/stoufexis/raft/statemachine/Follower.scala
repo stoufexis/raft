@@ -7,6 +7,7 @@ import fs2.*
 import org.typelevel.log4cats.Logger
 
 import com.stoufexis.raft.model.*
+import com.stoufexis.raft.persist.*
 import com.stoufexis.raft.rpc.*
 import com.stoufexis.raft.typeclass.IntLike.*
 
@@ -21,7 +22,8 @@ object Follower:
     rpc:     RPC[F, A, S],
     timeout: Timeout[F],
     logger:  Logger[F]
-  ): F[Behaviors[F, S]] =
+  ): F[Behaviors[F]] =
+    // Do the for comprehension in handleClientRequests
     for
       electionTimeout <- timeout.nextElectionTimeout
       (_, initIdx)    <- log.lastTermIndex

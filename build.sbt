@@ -26,6 +26,12 @@ lazy val grpc =
     "org.typelevel"        %% "fs2-grpc-runtime"  % "2.7.16"
   )
 
+lazy val persist =
+  Seq(
+    "org.tpolecat" %% "doobie-core" % "1.0.0-RC5",
+    "org.xerial"    % "sqlite-jdbc" % "3.46.1.0"
+  )
+
 lazy val test =
   Seq(
     "org.scalameta" %% "munit" % "1.0.0" % Test
@@ -44,7 +50,7 @@ lazy val raft =
     .in(file("modules/raft"))
     .dependsOn(proto)
     .settings(
-      libraryDependencies ++= cats ++ log ++ grpc ++ test,
+      libraryDependencies ++= cats ++ log ++ grpc ++ persist ++ test,
       scalacOptions ++= Seq(
         "-Ykind-projector:underscores",
         "-Wvalue-discard",

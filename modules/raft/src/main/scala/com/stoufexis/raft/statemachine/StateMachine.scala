@@ -10,6 +10,7 @@ import org.typelevel.log4cats.Logger
 import com.stoufexis.raft.model.*
 import com.stoufexis.raft.rpc.*
 import com.stoufexis.raft.service.NamedLogger
+import com.stoufexis.raft.persist.*
 
 import scala.concurrent.duration.FiniteDuration
 
@@ -34,7 +35,7 @@ object StateMachine:
         F.unit
 
     def go(st: NodeInfo, chan: Channel[F, NodeInfo]): Stream[F, Nothing] =
-      val behaviors: Resource[F, Behaviors[F, S]] =
+      val behaviors: Resource[F, Behaviors[F]] =
         for
           given Logger[F] <-
             Resource

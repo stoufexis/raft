@@ -7,6 +7,7 @@ import fs2.*
 import org.typelevel.log4cats.Logger
 
 import com.stoufexis.raft.model.*
+import com.stoufexis.raft.persist.*
 import com.stoufexis.raft.rpc.*
 import com.stoufexis.raft.typeclass.IntLike.*
 
@@ -34,7 +35,7 @@ object Leader:
     rpc:     RPC[F, A, S],
     timeout: Timeout[F],
     logger:  Logger[F]
-  ): Resource[F, Behaviors[F, S]] =
+  ): Resource[F, Behaviors[F]] =
     for
       // Closes the topics after a single NodeInfo is produced
       // Closing the topics interrupts subscribers and makes publishes no-ops
@@ -267,7 +268,7 @@ object Leader:
               term         = state.term,
               prevLogIndex = matchIdx,
               prevLogTerm  = matchIdxTerm,
-              entries      = entries
+              entries      = entries.drop(1)
             )
 
           rpc.appendEntries(node, request).flatMap:

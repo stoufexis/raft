@@ -1,4 +1,4 @@
-package com.stoufexis.raft.statemachine
+package com.stoufexis.raft.persist
 
 import com.stoufexis.raft.model.*
 

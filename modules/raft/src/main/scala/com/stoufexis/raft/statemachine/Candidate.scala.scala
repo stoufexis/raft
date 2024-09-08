@@ -7,6 +7,7 @@ import fs2.*
 import org.typelevel.log4cats.Logger
 
 import com.stoufexis.raft.model.*
+import com.stoufexis.raft.persist.*
 import com.stoufexis.raft.rpc.*
 
 import scala.concurrent.duration.FiniteDuration
@@ -20,7 +21,7 @@ object Candidate:
     rpc:     RPC[F, A, S],
     timeout: Timeout[F],
     logger:  Logger[F]
-  ): F[Behaviors[F, S]] =
+  ): F[Behaviors[F]] =
     for
       electionTimeout           <- timeout.nextElectionTimeout
       (lastLogTerm, lastLogIdx) <- log.lastTermIndex
