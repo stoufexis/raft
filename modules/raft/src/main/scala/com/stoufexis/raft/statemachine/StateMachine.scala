@@ -8,18 +8,19 @@ import fs2.concurrent.Channel
 import org.typelevel.log4cats.Logger
 
 import com.stoufexis.raft.model.*
+import com.stoufexis.raft.persist.*
 import com.stoufexis.raft.rpc.*
 import com.stoufexis.raft.service.NamedLogger
-import com.stoufexis.raft.persist.*
 
 import scala.concurrent.duration.FiniteDuration
 
 object StateMachine:
   def runLoop[F[_], A, S](
-    currentNode:    NodeId,
-    otherNodes:     Set[NodeId],
-    heartbeatEvery: FiniteDuration,
-    automaton:      (S, A) => S
+    currentNode:       NodeId,
+    otherNodes:        Set[NodeId],
+    heartbeatEvery:    FiniteDuration,
+    appenderBatchSize: Int,
+    automaton:         (S, A) => S
   )(using
     F:              Async[F],
     monoid:         Monoid[S],
@@ -45,7 +46,7 @@ object StateMachine:
           behaviors <- st.role match
             case Role.Follower(_) => Resource.eval(Follower(st))
             case Role.Candidate   => Resource.eval(Candidate(st))
-            case Role.Leader      => Leader(st, heartbeatEvery, automaton)
+            case Role.Leader      => Leader(st, heartbeatEvery, appenderBatchSize, automaton)
         yield behaviors
 
       // Works like parJoinUnbounded, but reuses the same channel and only ever outputs 1 element

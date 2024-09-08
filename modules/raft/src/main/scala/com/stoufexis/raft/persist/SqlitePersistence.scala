@@ -6,6 +6,7 @@ import doobie.*
 import doobie.implicits.given
 import doobie.util.compat.FactoryCompat
 import doobie.util.fragment.Fragment
+import doobie.util.query.Query0
 import doobie.util.transactor.Transactor
 import fs2.*
 import org.typelevel.log4cats.Logger
@@ -85,9 +86,9 @@ object SqlitePersistence:
             .transact(xa)
 
       log: Log[F, A] = new:
-        def rangeCIO(from: Index, until: Index): ConnectionIO[Chunk[A]] =
-          sql"SELECT * FROM log WHERE rowid >= $from AND rowid <= $until ORDER BY rowid ASC"
-            .query[LogRow].map(_.entry).to[Array].map(Chunk.array)
+        def rangeQuery(from: Index, until: Index): Query0[(Index, LogRow)] =
+          sql"SELECT rowid, * FROM log WHERE rowid >= $from AND rowid <= $until ORDER BY rowid ASC"
+            .query[(Index, LogRow)]
 
         def termCIO(index: Index): ConnectionIO[Term] =
           sql"SELECT term FROM log WHERE rowid = $index"
@@ -119,19 +120,20 @@ object SqlitePersistence:
         def term(index: Index): F[Term] =
           termCIO(index).transact(xa)
 
-        def range(from: Index, until: Index): F[(Term, Chunk[A])] =
-          termCIO(from)
-            .flatMap(t => rangeCIO(from, until).tupleLeft(t))
+        def range(from: Index, until: Index): F[Chunk[A]] =
+          rangeQuery(from, until)
+            .map(_._2.entry)
+            .to[Array]
+            .map(Chunk.array)
             .transact(xa)
 
-        def readUntil(until: Index): Stream[F, (Index, A)] =
-          sql"SELECT rowid, * FROM log WHERE rowid <= $until ORDER BY rowid ASC"
-            .query[(Index, LogRow)]
+        def rangeStream(from: Index, until: Index): Stream[F, (Index, A)] =
+          rangeQuery(from, until)
             .map((idx, x) => (idx, x.entry))
             .streamWithChunkSize(fetchSize)
             .transact(xa)
 
-        def appendChunkIfMatches(
+        def overwriteChunkIfMatches(
           prevLogTerm:  Term,
           prevLogIndex: Index,
           term:         Term,
@@ -143,7 +145,10 @@ object SqlitePersistence:
           ).transact(xa)
 
         def appendChunk(term: Term, prevLogIndex: Index, entries: Chunk[A]): F[Index] =
-          appendChunkCIO(term, prevLogIndex, entries).transact(xa)
+          lastTermIndexCIO.map(_._2 == prevLogIndex).ifM(
+            appendChunkCIO(term, prevLogIndex, entries),
+            FC.raiseError(IllegalStateException("appendChunk not called at log end"))
+          ).transact(xa)
 
         def lastTermIndex: F[(Term, Index)] =
           lastTermIndexCIO.transact(xa)

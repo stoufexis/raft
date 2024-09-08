@@ -20,6 +20,8 @@ object IntLike:
     infix def <=(b: A): Boolean = IntLikeOrdering[A].lteq(a, b)
 
     infix def >=(b: A): Boolean = IntLikeOrdering[A].gteq(a, b)
+    
+    infix def diff(b: A): Long = a.toLong - b.toLong
 
   given IntLikeInt: IntLike[Int] with
     def add(a: Int, i: Int): Int = a + i

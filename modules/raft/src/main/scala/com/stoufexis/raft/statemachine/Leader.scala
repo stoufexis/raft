@@ -26,9 +26,10 @@ object Leader:
     * leader. TODO: I think this means I can get rid of the leaderCommit in AppendEntries requests
     */
   def apply[F[_], A, S: Monoid](
-    state:          NodeInfo,
-    heartbeatEvery: FiniteDuration,
-    automaton:      (S, A) => S
+    state:           NodeInfo,
+    heartbeatEvery:  FiniteDuration,
+    appendBatchSize: Int,
+    automaton:       (S, A) => S
   )(using
     F:       Temporal[F],
     log:     Log[F, A],
@@ -58,7 +59,7 @@ object Leader:
 
       sm: Stream[F, Nothing] =
         log
-          .readUntil(i)
+          .rangeStream(Index.init, i)
           .fold((Index.init, Monoid[S].empty)):
             case ((_, s), (index, a)) => (index, automaton(s, a))
           .flatMap(stateMachine(state, matchIdxs, newIdxs, _, _, automaton))
@@ -67,7 +68,7 @@ object Leader:
         state
           .allNodes
           .toList
-          .map(appender(state, _, newIdxs, matchIdxs, heartbeatEvery))
+          .map(appender(state, _, newIdxs, matchIdxs, heartbeatEvery, appendBatchSize))
     yield Behaviors(handleIncomingAppends(state) :: handleIncomingVotes(state) :: checker :: sm :: appenders)
 
   def handleIncomingVotes[F[_], A, S](
@@ -147,9 +148,12 @@ object Leader:
     def fulfill(clients: Queue[WaitingClient], cidx: Index, s: S): F[(Queue[WaitingClient], S)] =
       clients.dequeueOption match
         case Some(((start, end, sink), tail)) if end <= cidx =>
-          log.range(start, end).flatMap: (_, entries) =>
-            val newS = entries.foldLeft(s)(automaton)
-            sink.complete(ClientResponse.Executed(newS)) >> fulfill(tail, cidx, newS)
+          log.rangeStream(start, end)
+            .map(_._2)
+            .compile
+            .fold(s)(automaton)
+            .flatMap: newS =>
+              sink.complete(ClientResponse.Executed(newS)) >> fulfill(tail, cidx, newS)
 
         case _ => F.pure(clients, s)
 
@@ -239,7 +243,8 @@ object Leader:
     node:           NodeId,
     newIdxs:        CloseableTopic[F, Index],
     matchIdxs:      CloseableTopic[F, (NodeId, Index)],
-    heartbeatEvery: FiniteDuration
+    heartbeatEvery: FiniteDuration,
+    batchSize:      Int
   )(using
     F:   Temporal[F],
     log: Log[F, A],
@@ -254,12 +259,19 @@ object Leader:
       def pinged(i: Index = matchIdx): F[Unit] =
         matchIdxs.publish((node, i)).void
 
-      def go(matchIdx: Index, newIdx: Index, seek: Boolean = false): F[Either[Index, NodeInfo]] =
+      def go(
+        matchIdx: Index,
+        newIdx:   Index,
+        seek:     Boolean = false
+      ): F[Either[Index, NodeInfo]] =
+        val startIdx: Index = matchIdx + 1
+        val endIdx:   Index = startIdx + batchSize
+
         val info: F[(Term, Chunk[A])] =
-          if seek then
-            log.term(matchIdx).map((_, Chunk.empty))
-          else
-            log.range(matchIdx, newIdx)
+          log.term(matchIdx).product:
+            if seek
+            then F.pure(Chunk.empty)
+            else log.range(startIdx, endIdx)
 
         info.flatMap: (matchIdxTerm, entries) =>
           val request: AppendEntries[A] =
@@ -268,15 +280,18 @@ object Leader:
               term         = state.term,
               prevLogIndex = matchIdx,
               prevLogTerm  = matchIdxTerm,
-              entries      = entries.drop(1)
+              entries      = entries
             )
 
           rpc.appendEntries(node, request).flatMap:
             case AppendResponse.Accepted if seek =>
               pinged() >> go(matchIdx, newIdx, seek = false)
 
-            case AppendResponse.Accepted =>
+            case AppendResponse.Accepted if endIdx >= newIdx =>
               pinged(newIdx) as Left(newIdx)
+
+            case AppendResponse.Accepted =>
+              pinged() >> go(endIdx, newIdx, seek = false)
 
             case AppendResponse.NotConsistent =>
               pinged() >> go(matchIdx - 1, newIdx, seek = true)

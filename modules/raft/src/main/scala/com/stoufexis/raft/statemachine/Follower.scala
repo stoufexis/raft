@@ -73,7 +73,7 @@ object Follower:
         */
       case (i, IncomingAppend(req, sink)) if state.isCurrentLeader(req.term, req.leaderId) =>
         val append: F[Index] =
-          log.appendChunkIfMatches(req.prevLogTerm, req.prevLogIndex, req.term, req.entries).flatMap:
+          log.overwriteChunkIfMatches(req.prevLogTerm, req.prevLogIndex, req.term, req.entries).flatMap:
             case None       => req.inconsistent(sink) as i
             case Some(newI) => req.accepted(sink) as newI
 

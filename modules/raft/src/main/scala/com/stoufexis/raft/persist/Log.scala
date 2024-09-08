@@ -9,20 +9,21 @@ trait Log[F[_], A]:
   // prevIdx is the expected index of the currently last entry in the log
   // it overwrites all entries after prevIdx with the new entries
   // Returns the new last index of the log
+  // Throws if prevIdx is not the current last index
   def appendChunk(term: Term, prevIdx: Index, entries: Chunk[A]): F[Index]
 
-  def appendChunkIfMatches(
+  def overwriteChunkIfMatches(
     prevLogTerm:  Term,
     prevLogIndex: Index,
     term:         Term,
     entries:      Chunk[A]
   ): F[Option[Index]]
 
-  /** Inclusive range. Returns the term from the first entry in the Chunk
+  /** Inclusive range
     */
-  def range(from: Index, until: Index): F[(Term, Chunk[A])]
+  def range(from: Index, until: Index): F[Chunk[A]]
 
-  def readUntil(until: Index): Stream[F, (Index, A)]
+  def rangeStream(from: Index, until: Index): Stream[F, (Index, A)]
 
   def lastTermIndex: F[(Term, Index)]
 
