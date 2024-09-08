@@ -28,11 +28,11 @@ object SqlitePersistence:
     F:         Async[F],
     logger:    Logger[F],
     storeable: Storeable[A]
-  ): F[(Log[F, A], PersistedState[F])] =
+  ): Resource[F, (Log[F, A], PersistedState[F])] =
 
     case class LogRow(index: Index, term: Term, entry: A)
     case class IndexlessLogRow(term: Term, entry: A)
-    case class PersistedRow(term: Term, vote: NodeId)
+    case class PersistedRow(term: Term, vote: Option[NodeId])
 
     val connectionResource: Resource[F, Connection] =
       Resource.fromAutoCloseable:
@@ -75,6 +75,17 @@ object SqlitePersistence:
         logger.info(s"Setting up ddl: ${ddl.internals.sql}")
           >> ddl.update.run.transact(xa)
 
+      persistentState: PersistedState[F] = new:
+        def persist(term: Term, vote: Option[NodeId]): F[Unit] =
+          sql"INSERT INTO persisted_state(term,vote) VALUES (${PersistedRow(term, vote)})"
+            .update.run.transact(xa).void
+
+        def readLatest: F[(Term, Option[NodeId])] =
+          sql"SELECT term, vote FROM log ORDER BY term DESC LIMIT 1"
+            .query[(Term, Option[NodeId])]
+            .unique
+            .transact(xa)
+
       log: Log[F, A] = new:
         def rangeCIO(from: Index, until: Index): ConnectionIO[Chunk[A]] =
           sql"SELECT * FROM log WHERE index >= $from AND index <= $until ORDER BY index ASC"
@@ -96,7 +107,7 @@ object SqlitePersistence:
             .query.option.map(_.isDefined)
 
         def lastTermIndexCIO: ConnectionIO[(Term, Index)] =
-          sql"SELECT term, index FROM log ORDER BY index DESC LIMIT 1;"
+          sql"SELECT term, index FROM log ORDER BY index DESC LIMIT 1"
             .query[(Term, Index)]
             .unique
 
@@ -138,6 +149,4 @@ object SqlitePersistence:
 
         def lastTermIndex: F[(Term, Index)] =
           lastTermIndexCIO.transact(xa)
-    yield ()
-
-    ???
+    yield (log, persistentState)
