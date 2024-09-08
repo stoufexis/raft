@@ -148,7 +148,7 @@ def parRepeat[F[_]: Temporal, A, B](
     .parJoinUnbounded
 
 extension [F[_]](req: AppendEntries[?])(using F: MonadThrow[F], logger: Logger[F])
-  def termExpired(state: NodeInfo[?], sink: DeferredSink[F, AppendResponse]): F[Unit] =
+  def termExpired(state: NodeInfo, sink: DeferredSink[F, AppendResponse]): F[Unit] =
     for
       _ <- sink.complete_(AppendResponse.TermExpired(state.term))
       _ <- logger.warn(s"Detected stale leader ${req.leaderId}")
@@ -174,7 +174,7 @@ extension [F[_]](req: AppendEntries[?])(using F: MonadThrow[F], logger: Logger[F
     yield ()
 
 extension [F[_]](req: RequestVote)(using F: MonadThrow[F], logger: Logger[F])
-  def termExpired(state: NodeInfo[?], sink: DeferredSink[F, VoteResponse]): F[Unit] =
+  def termExpired(state: NodeInfo, sink: DeferredSink[F, VoteResponse]): F[Unit] =
     for
       _ <- sink.complete_(VoteResponse.TermExpired(state.term))
       _ <- logger.warn(s"Detected stale candidate ${req.candidateId}")

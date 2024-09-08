@@ -2,7 +2,7 @@ package com.stoufexis.raft.model
 
 import com.stoufexis.raft.typeclass.IntLike.*
 
-case class NodeInfo[S](
+case class NodeInfo(
   role:        Role,
   term:        Term,
   knownLeader: Option[NodeId],
@@ -21,22 +21,25 @@ case class NodeInfo[S](
   def isMajority(nodes: Set[NodeId]): Boolean =
     (nodes intersect allNodes).size >= majorityCnt
 
-  def toFollower(newTerm: Term, leaderId: NodeId): NodeInfo[S] =
-    copy(role = Role.Follower, term = newTerm, knownLeader = Some(leaderId))
+  def toFollower(newTerm: Term, leaderId: NodeId): NodeInfo =
+    copy(role = Role.Follower(None), term = newTerm, knownLeader = Some(leaderId))
 
-  def toFollower(leaderId: NodeId): NodeInfo[S] =
-    copy(role = Role.Follower, knownLeader = Some(leaderId))
+  def toFollower(leaderId: NodeId): NodeInfo =
+    copy(role = Role.Follower(None), knownLeader = Some(leaderId))
 
-  def toFollowerUnknownLeader(newTerm: Term): NodeInfo[S] =
-    copy(role = Role.Follower, term = newTerm, knownLeader = None)
+  def toFollowerUnknownLeader(newTerm: Term): NodeInfo =
+    copy(role = Role.Follower(None), term = newTerm, knownLeader = None)
 
-  def toFollowerUnknownLeader: NodeInfo[S] =
-    copy(role = Role.Follower, knownLeader = None)
+  def toFollowerUnknownLeader: NodeInfo =
+    copy(role = Role.Follower(None), knownLeader = None)
 
-  def toCandidateNextTerm: NodeInfo[S] =
+  def toVotedFollower(votedFor: NodeId): NodeInfo =
+    copy(role = Role.Follower(Some(votedFor)), knownLeader = None)
+
+  def toCandidateNextTerm: NodeInfo =
     copy(role = Role.Candidate, term = term + 1)
 
-  def toLeader: NodeInfo[S] =
+  def toLeader: NodeInfo =
     copy(role = Role.Leader, knownLeader = Some(currentNode))
 
   def isNew(otherTerm: Term): Boolean =
@@ -56,3 +59,21 @@ case class NodeInfo[S](
 
   def isCurrentLeader(otherTerm: Term, node: NodeId): Boolean =
     isCurrent(otherTerm) && isLeader(node)
+
+  def isVotee(node: NodeId): Boolean =
+    role match
+      case Role.Follower(vf) => vf.exists(_ == node)
+      case _                 => false
+
+  def isCurrentVotee(otherTerm: Term, node: NodeId): Boolean =
+    isCurrent(otherTerm) && isVotee(node)
+
+  def hasVoted: Boolean =
+    role match
+      case Role.Follower(_) => true
+      case _                => false
+
+  def votedFor: Option[NodeId] =
+    role match
+      case Role.Follower(vf) => vf
+      case _                 => None

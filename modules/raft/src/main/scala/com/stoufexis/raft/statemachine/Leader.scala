@@ -25,7 +25,7 @@ object Leader:
     * leader. TODO: I think this means I can get rid of the leaderCommit in AppendEntries requests
     */
   def apply[F[_], A, S: Monoid](
-    state:          NodeInfo[S],
+    state:          NodeInfo,
     heartbeatEvery: FiniteDuration,
     automaton:      (S, A) => S
   )(using
@@ -36,7 +36,7 @@ object Leader:
     logger:  Logger[F]
   ): Resource[F, Behaviors[F, S]] =
     for
-      // Closes the topics after a single NodeInfo[S] is produced
+      // Closes the topics after a single NodeInfo is produced
       // Closing the topics interrupts subscribers and makes publishes no-ops
       // Any further writes or reads will return None
       newIdxs: CloseableTopic[F, Index] <-
@@ -52,7 +52,7 @@ object Leader:
       (_, i) <- Resource.eval(log.lastTermIndex)
       _      <- Resource.eval(newIdxs.publish(i).void)
 
-      checker: Stream[F, NodeInfo[S]] =
+      checker: Stream[F, NodeInfo] =
         partitionChecker(state, matchIdxs, electionTimeout)
 
       sm: Stream[F, Nothing] =
@@ -62,7 +62,7 @@ object Leader:
             case ((_, s), (index, a)) => (index, automaton(s, a))
           .flatMap(stateMachine(state, matchIdxs, newIdxs, _, _, automaton))
 
-      appenders: List[Stream[F, NodeInfo[S]]] =
+      appenders: List[Stream[F, NodeInfo]] =
         state
           .allNodes
           .toList
@@ -70,12 +70,12 @@ object Leader:
     yield Behaviors(handleIncomingAppends(state) :: handleIncomingVotes(state) :: checker :: sm :: appenders)
 
   def handleIncomingVotes[F[_], A, S](
-    state: NodeInfo[S]
+    state: NodeInfo
   )(using
     F:      MonadThrow[F],
     rpc:    RPC[F, A, S],
     logger: Logger[F]
-  ): Stream[F, NodeInfo[S]] =
+  ): Stream[F, NodeInfo] =
     rpc.incomingVotes.evalMapFirstSome:
       case IncomingVote(req, sink) if state.isExpired(req.term) =>
         req.termExpired(state, sink) as None
@@ -90,12 +90,12 @@ object Leader:
         F.pure(Some(state.toFollowerUnknownLeader(req.term)))
 
   def handleIncomingAppends[F[_], A, S](
-    state: NodeInfo[S]
+    state: NodeInfo
   )(using
     F:      MonadThrow[F],
     rpc:    RPC[F, A, S],
     logger: Logger[F]
-  ): Stream[F, NodeInfo[S]] =
+  ): Stream[F, NodeInfo] =
     rpc.incomingAppends.evalMapFirstSome:
       case IncomingAppend(req, sink) if state.isExpired(req.term) =>
         req.termExpired(state, sink) as None
@@ -127,7 +127,7 @@ object Leader:
     * upstream, in incomingClientRequests.
     */
   def stateMachine[F[_], A, S](
-    state:     NodeInfo[S],
+    state:     NodeInfo,
     matchIdx:  CloseableTopic[F, (NodeId, Index)],
     newIdxs:   CloseableTopic[F, Index],
     initIdx:   Index,
@@ -184,13 +184,13 @@ object Leader:
     * does not notice another leader with a higher term.
     */
   def partitionChecker[F[_], S](
-    state:           NodeInfo[S],
+    state:           NodeInfo,
     matchIdxs:       CloseableTopic[F, (NodeId, Index)],
     electionTimeout: FiniteDuration
   )(using
     F:      Temporal[F],
     logger: Logger[F]
-  ): Stream[F, NodeInfo[S]] =
+  ): Stream[F, NodeInfo] =
     matchIdxs.subscribeUnbounded.resettableTimeoutAccumulate(
       init      = Set(state.currentNode),
       timeout   = electionTimeout,
@@ -234,7 +234,7 @@ object Leader:
     * the latest matchIdx in the matchIdxs topic. This keeps the partition checker from timing out.
     */
   def appender[F[_], A, S](
-    state:          NodeInfo[S],
+    state:          NodeInfo,
     node:           NodeId,
     newIdxs:        CloseableTopic[F, Index],
     matchIdxs:      CloseableTopic[F, (NodeId, Index)],
@@ -243,8 +243,8 @@ object Leader:
     F:   Temporal[F],
     log: Log[F, A],
     rpc: RPC[F, A, S]
-  ): Stream[F, NodeInfo[S]] =
-    def send(matchIdxO: Option[Index], newIdx: Index): F[(Option[Index], Option[NodeInfo[S]])] =
+  ): Stream[F, NodeInfo] =
+    def send(matchIdxO: Option[Index], newIdx: Index): F[(Option[Index], Option[NodeInfo])] =
       val matchIdx: Index =
         matchIdxO.getOrElse(newIdx)
       // Should be called whenever the node successfully responded, even if AppendEntries ultimately failed.
@@ -253,7 +253,7 @@ object Leader:
       def pinged(i: Index = matchIdx): F[Unit] =
         matchIdxs.publish((node, i)).void
 
-      def go(matchIdx: Index, newIdx: Index, seek: Boolean = false): F[Either[Index, NodeInfo[S]]] =
+      def go(matchIdx: Index, newIdx: Index, seek: Boolean = false): F[Either[Index, NodeInfo]] =
         val info: F[(Term, Chunk[A])] =
           if seek then
             log.term(matchIdx).map((_, Chunk.empty))

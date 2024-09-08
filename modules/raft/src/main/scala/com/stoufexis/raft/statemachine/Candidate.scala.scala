@@ -13,7 +13,7 @@ import scala.concurrent.duration.FiniteDuration
 
 object Candidate:
   def apply[F[_], A, S: Monoid](
-    state: NodeInfo[S]
+    state: NodeInfo
   )(using
     F:       Temporal[F],
     log:     Log[F, A],
@@ -31,19 +31,19 @@ object Candidate:
       solicitVotes(state, electionTimeout, lastLogIdx, lastLogTerm)
     )
 
-  def handleClientRequests[F[_], A, S](state: NodeInfo[S])(using rpc: RPC[F, A, S]): Stream[F, Nothing] =
+  def handleClientRequests[F[_], A, S](state: NodeInfo)(using rpc: RPC[F, A, S]): Stream[F, Nothing] =
     rpc
       .incomingClientRequests
       .evalMap(_.sink.complete(ClientResponse.knownLeader(state.knownLeader)))
       .drain
 
   def handleIncomingAppends[F[_], A, S](
-    state: NodeInfo[S]
+    state: NodeInfo
   )(using
     F:      MonadThrow[F],
     rpc:    RPC[F, A, S],
     logger: Logger[F]
-  ): Stream[F, NodeInfo[S]] =
+  ): Stream[F, NodeInfo] =
     rpc.incomingAppends.evalMapFirstSome:
       case IncomingAppend(req, sink) if state.isExpired(req.term) =>
         req.termExpired(state, sink) as None
@@ -55,12 +55,12 @@ object Candidate:
         F.pure(Some(state.toFollower(req.term, req.leaderId)))
 
   def handleIncomingVotes[F[_], A, S](
-    state: NodeInfo[S]
+    state: NodeInfo
   )(using
     F:      MonadThrow[F],
     rpc:    RPC[F, A, S],
     logger: Logger[F]
-  ): Stream[F, NodeInfo[S]] =
+  ): Stream[F, NodeInfo] =
     rpc.incomingVotes.evalMapFirstSome:
       case IncomingVote(req, sink) if state.isExpired(req.term) =>
         req.termExpired(state, sink) as None
@@ -80,7 +80,7 @@ object Candidate:
     * election.
     */
   def solicitVotes[F[_], A, S](
-    state:           NodeInfo[S],
+    state:           NodeInfo,
     electionTimeout: FiniteDuration,
     lastLogIdx:      Index,
     lastLogTerm:     Term
@@ -88,7 +88,7 @@ object Candidate:
     F:   Temporal[F],
     log: Logger[F],
     rpc: RPC[F, A, S]
-  ): Stream[F, NodeInfo[S]] =
+  ): Stream[F, NodeInfo] =
     import ResettableTimeout.*
 
     def req(node: NodeId): F[(NodeId, VoteResponse)] =
