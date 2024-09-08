@@ -37,7 +37,9 @@ object StateMachine:
       val behaviors: Resource[F, Behaviors[F, S]] =
         for
           given Logger[F] <-
-            Resource.eval(NamedLogger[F].fromState(st))
+            Resource
+              .eval(NamedLogger[F].fromState(st))
+              .evalTap(_.info("Transitioned"))
 
           behaviors <- st.role match
             case Role.Follower(_) => Resource.eval(Follower(st))
