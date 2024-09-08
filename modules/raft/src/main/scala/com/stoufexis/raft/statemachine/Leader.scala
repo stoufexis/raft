@@ -15,6 +15,7 @@ import scala.collection.immutable.Queue
 import scala.concurrent.duration.FiniteDuration
 
 object Leader:
+
   /** Linearizability of reads is implemented quite inefficiently right now. A read is inserted as a special
     * entry in the log, and the read returns to the client only after the special entry is marked as
     * committed. Section "6.4 Processing read-only queries more efficiently" of the [Raft
@@ -141,22 +142,6 @@ object Leader:
     rpc:    RPC[F, A, S],
     log:    Log[F, A]
   ): Stream[F, Nothing] =
-    // start, end (inclusive), sink
-    type WaitingClient = (Index, Index, DeferredSink[F, ClientResponse[S]])
-
-    // clients are assumed to be in order here - the first to be dequeued is the oldest one
-    def fulfill(clients: Queue[WaitingClient], cidx: Index, s: S): F[(Queue[WaitingClient], S)] =
-      clients.dequeueOption match
-        case Some(((start, end, sink), tail)) if end <= cidx =>
-          log.rangeStream(start, end)
-            .map(_._2)
-            .compile
-            .fold(s)(automaton)
-            .flatMap: newS =>
-              sink.complete(ClientResponse.Executed(newS)) >> fulfill(tail, cidx, newS)
-
-        case _ => F.pure(clients, s)
-
     // Assumes that matchIdxs for each node always increase
     val commitIdx: Stream[F, Index] =
       matchIdx
@@ -171,12 +156,14 @@ object Leader:
       commitIdx.mergeEither(rpc.incomingClientRequests)
 
     // Waiting clients in the vector are assumed to have non-overlapping and continuous indexes
-    val acc: (Queue[WaitingClient], Index, S) =
+    val acc: (Queue[WaitingClient[F, S]], Index, S) =
       (Queue.empty, initIdx, initS)
 
     commitsAndAppends.evalScanDrain(acc):
       case ((clients, idxEnd, s), Left(commitIdx)) =>
-        fulfill(clients, commitIdx, s).map((_, idxEnd, _))
+        clients
+          .fulfill(commitIdx, s, automaton)
+          .map((_, idxEnd, _))
 
       case ((clients, idxEnd, s), Right(req)) =>
         for
@@ -314,5 +301,4 @@ object Leader:
       .subscribeUnbounded
       .dropping(1)
       .repeatLast(heartbeatEvery)
-      .evalMapFilterAccumulate(Option.empty[Index])(send(_, _))
-      .head
+      .evalMapAccumulateFirstSome(Option.empty[Index])(send(_, _))
