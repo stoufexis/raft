@@ -10,7 +10,6 @@ import org.typelevel.log4cats.Logger
 import com.stoufexis.raft.model.*
 import com.stoufexis.raft.persist.*
 import com.stoufexis.raft.rpc.*
-import com.stoufexis.raft.service.NamedLogger
 
 import scala.concurrent.duration.FiniteDuration
 
@@ -44,8 +43,8 @@ object StateMachine:
               .evalTap(_.info("Transitioned"))
 
           behaviors <- st.role match
-            case Role.Follower(_) => Resource.eval(Follower(st))
-            case Role.Candidate   => Resource.eval(Candidate(st))
+            case Role.Follower(_) => Resource.pure(Follower(st))
+            case Role.Candidate   => Resource.pure(Candidate(st))
             case Role.Leader      => Leader(st, heartbeatEvery, appenderBatchSize, automaton)
         yield behaviors
 

@@ -21,15 +21,16 @@ object Candidate:
     rpc:     RPC[F, A, S],
     timeout: Timeout[F],
     logger:  Logger[F]
-  ): F[Behaviors[F]] =
-    for
-      electionTimeout           <- timeout.nextElectionTimeout
-      (lastLogTerm, lastLogIdx) <- log.lastTermIndex
-    yield Behaviors(
+  ): Behaviors[F] =
+    Behaviors(
       handleIncomingAppends(state),
       handleIncomingVotes(state),
       handleClientRequests(state),
-      solicitVotes(state, electionTimeout, lastLogIdx, lastLogTerm)
+      for
+        electionTimeout           <- Stream.eval(timeout.nextElectionTimeout)
+        (lastLogTerm, lastLogIdx) <- Stream.eval(log.lastTermIndex)
+        out                       <- solicitVotes(state, electionTimeout, lastLogIdx, lastLogTerm)
+      yield out
     )
 
   def handleClientRequests[F[_], A, S](state: NodeInfo)(using rpc: RPC[F, A, S]): Stream[F, Nothing] =

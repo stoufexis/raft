@@ -19,7 +19,7 @@ import scala.reflect.ClassTag
 import java.sql.{Connection, DriverManager}
 
 object SqlitePersistence:
-  /** Uses a single connection, since this is never used concurrently.
+  /** Uses a single connection since there is no concurrent use.
     */
   def apply[F[_], A: ClassTag](dbPath: String, fetchSize: Int)(using
     F:         Async[F],
@@ -141,7 +141,7 @@ object SqlitePersistence:
         ): F[Option[Index]] =
           matches(prevLogTerm, prevLogIndex).ifM(
             appendChunkCIO(term, prevLogIndex, entries).map(Some(_)),
-            Option.empty[Index].pure[ConnectionIO]
+            FC.pure(None)
           ).transact(xa)
 
         def appendChunk(term: Term, prevLogIndex: Index, entries: Chunk[A]): F[Index] =

@@ -48,29 +48,31 @@ object Leader:
       matchIdxs: CloseableTopic[F, (NodeId, Index)] <-
         CloseableTopic[F, (NodeId, Index)]
 
-      electionTimeout: FiniteDuration <-
-        Resource.eval(timeout.nextElectionTimeout)
-
-      // Send initial index to newIdxs so appenders can immediatelly start heartbeating
-      (_, i) <- Resource.eval(log.lastTermIndex)
-      _      <- Resource.eval(newIdxs.publish(i).void)
-
       checker: Stream[F, NodeInfo] =
-        partitionChecker(state, matchIdxs, electionTimeout)
+        Stream
+          .eval(timeout.nextElectionTimeout)
+          .flatMap(partitionChecker(state, matchIdxs, _))
 
       sm: Stream[F, Nothing] =
-        log
-          .rangeStream(Index.init, i)
-          .fold((Index.init, Monoid[S].empty)):
-            case ((_, s), (index, a)) => (index, automaton(s, a))
-          .flatMap(stateMachine(state, matchIdxs, newIdxs, _, _, automaton))
+        Stream
+          .eval(log.lastTermIndex.map(_._2))
+          .evalTap(newIdxs.publish(_).void)
+          .flatMap: i =>
+            log
+              .rangeStream(Index.init, i)
+              .fold((Index.init, Monoid[S].empty)):
+                case ((_, s), (index, a)) => (index, automaton(s, a))
+              .flatMap(stateMachine(state, matchIdxs, newIdxs, _, _, automaton))
 
       appenders: List[Stream[F, NodeInfo]] =
         state
           .allNodes
           .toList
           .map(appender(state, _, newIdxs, matchIdxs, heartbeatEvery, appendBatchSize))
-    yield Behaviors(handleIncomingAppends(state) :: handleIncomingVotes(state) :: checker :: sm :: appenders)
+
+      inAppends: Stream[F, NodeInfo] = handleIncomingAppends(state)
+      votes:     Stream[F, NodeInfo] = handleIncomingVotes(state)
+    yield Behaviors(inAppends :: votes :: checker :: sm :: appenders)
 
   def handleIncomingVotes[F[_], A, S](
     state: NodeInfo

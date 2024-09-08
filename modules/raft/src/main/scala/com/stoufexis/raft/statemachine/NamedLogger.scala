@@ -1,4 +1,4 @@
-package com.stoufexis.raft.service
+package com.stoufexis.raft.statemachine
 
 import cats.effect.kernel.Sync
 import org.typelevel.log4cats.Logger

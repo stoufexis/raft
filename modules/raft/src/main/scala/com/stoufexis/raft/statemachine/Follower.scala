@@ -22,14 +22,14 @@ object Follower:
     rpc:     RPC[F, A, S],
     timeout: Timeout[F],
     logger:  Logger[F]
-  ): F[Behaviors[F]] =
-    // Do the for comprehension in handleClientRequests
-    for
-      electionTimeout <- timeout.nextElectionTimeout
-      (_, initIdx)    <- log.lastTermIndex
-    yield Behaviors(
-      handleIncomingAppendsAndVotes(state, electionTimeout, initIdx),
-      handleClientRequests(state)
+  ): Behaviors[F] =
+    Behaviors(
+      handleClientRequests(state),
+      for
+        electionTimeout <- Stream.eval(timeout.nextElectionTimeout)
+        (_, initIdx)    <- Stream.eval(log.lastTermIndex)
+        out             <- handleIncomingAppendsAndVotes(state, electionTimeout, initIdx)
+      yield out
     )
 
   def handleClientRequests[F[_], A, S](state: NodeInfo)(using rpc: RPC[F, A, S]): Stream[F, Nothing] =
