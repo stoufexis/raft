@@ -3,15 +3,23 @@ package com.stoufexis.raft
 import cats.effect.*
 import cats.effect.std.*
 import cats.implicits.given
+import com.google.protobuf.struct.Struct
+import doobie.util.*
 import fs2.*
+import org.typelevel.log4cats.Logger
+import org.typelevel.log4cats.slf4j.Slf4jLogger
+import scalapb.grpc.ProtoInputStream
+
+import com.stoufexis.raft.persist.SqlitePersistence
+import com.stoufexis.raft.proto.protos.*
+import com.stoufexis.raft.typeclass.Storeable
 
 import scala.annotation.unused
 import scala.collection.immutable.HashMap
 import scala.collection.mutable.ArrayBuilder
 import scala.concurrent.duration.*
-import com.google.protobuf.struct.Struct
-import scalapb.grpc.ProtoInputStream
-import com.stoufexis.raft.proto.protos.*
+import com.stoufexis.raft.model.*
+import com.stoufexis.raft.typeclass.IntLike.*
 
 /*
   TODOS For leader
@@ -68,8 +76,6 @@ import com.stoufexis.raft.proto.protos.*
 
 //   override def astruct(request: MessageIn, ctx: Metadata): IO[MessageOut] = ???
 
-
-
 // }
 
 // class PingerServiceImpl extends PingerFs2Grpc[IO, Metadata]:
@@ -116,3 +122,12 @@ import com.stoufexis.raft.proto.protos.*
 
 // object Client extends IOApp.Simple:
 //   def run: IO[Unit] = client
+
+object Main extends IOApp.Simple:
+  case class Foo(bar: Int, baz: String) derives Storeable
+
+  given Logger[IO] = Slf4jLogger.getLogger
+
+  def run: IO[Unit] =
+    SqlitePersistence[IO, Foo]("test.db", 10).use: (_, p) =>
+      p.readLatest.flatMap(IO.println)

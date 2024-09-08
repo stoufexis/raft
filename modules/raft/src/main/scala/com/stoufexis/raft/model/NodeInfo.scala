@@ -10,7 +10,7 @@ case class NodeInfo(
   otherNodes:  Set[NodeId]
 ):
   def print: String =
-    s"${role.toString}(term = ${term.toInt})"
+    s"${role.toString}(term = ${term.toLong})"
 
   def allNodes: Set[NodeId] =
     otherNodes + currentNode
