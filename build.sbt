@@ -44,6 +44,15 @@ lazy val proto =
       libraryDependencies ++= grpc
     )
 
+lazy val impl =
+  project
+    .in(file("modules/impl"))
+    .dependsOn(raft)
+    .enablePlugins(Fs2Grpc)
+    .settings(
+      libraryDependencies ++= cats ++ log ++ grpc,
+    )
+
 lazy val raft =
   project
     .in(file("modules/raft"))
@@ -67,4 +76,4 @@ lazy val raft =
 lazy val root =
   project
     .in(file("."))
-    .aggregate(proto, raft)
+    .aggregate(proto, raft, impl)

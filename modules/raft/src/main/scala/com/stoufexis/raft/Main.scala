@@ -1,13 +1,18 @@
 package com.stoufexis.raft
 
+import _root_.io.grpc.*
 import cats.effect.*
 import cats.effect.std.*
 import cats.implicits.given
 import com.google.protobuf.struct.Struct
-import doobie.util.*
 import fs2.*
+import fs2.grpc.syntax.all.given
+import io.grpc.netty.shaded.io.grpc.netty.NettyChannelBuilder
+import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder
 import org.typelevel.log4cats.Logger
 import org.typelevel.log4cats.slf4j.Slf4jLogger
+import scalapb.GeneratedMessage
+import scalapb.GeneratedMessageCompanion
 import scalapb.grpc.ProtoInputStream
 
 import com.stoufexis.raft.model.*
@@ -72,66 +77,37 @@ import scala.concurrent.duration.*
  * The above assumes a constant node id for a member of the cluster.
  */
 
-// class StructerServiceImpl extends StructerFs2Grpc[IO, Metadata] {
+class StructerServiceImpl[A <: GeneratedMessage: GeneratedMessageCompanion]
+    extends StructerFs2Grpc[IO, Metadata] {
 
-//   override def astruct(request: MessageIn, ctx: Metadata): IO[MessageOut] = ???
+  override def astruct(request: MessageIn, ctx: Metadata): IO[MessageOut] =
+    val a   = request.payloads.map(_.unpack[A])
+    val str = a.toString
+    println(str)
+    IO.pure(MessageOut(str))
 
-// }
+}
 
-// class PingerServiceImpl extends PingerFs2Grpc[IO, Metadata]:
-//   def ping(request: PingRequest, @unused ctx: Metadata): IO[PingResponse] =
-//     request match
-//       case PingRequest("PING") => IO.pure(PingResponse("PONG"))
-//       case PingRequest(msg)    => IO.pure(PingResponse(s"Malformed request: $msg"))
+object StructerServiceImpl:
+  def runServer[A <: GeneratedMessage: GeneratedMessageCompanion]: Resource[IO, Unit] =
+    for
+      service: ServerServiceDefinition <-
+        StructerFs2Grpc.bindServiceResource[IO](new StructerServiceImpl[A])
 
-// val client: IO[Unit] =
-//   val managedChannelResource: Resource[IO, ManagedChannel] =
-//     NettyChannelBuilder
-//       .forAddress("127.0.0.1", 9999)
-//       .usePlaintext()
-//       .resource[IO]
+      _ <-
+        NettyServerBuilder
+          .forPort(9999)
+          .addService(service)
+          .resource[IO]
+          .evalMap(server => IO(server.start()))
+    yield ()
 
-//   val resource: Resource[IO, PingerFs2Grpc[IO, Metadata]] =
-//     managedChannelResource
-//       .flatMap(PingerFs2Grpc.stubResource)
+  val managedChannelResource: Resource[IO, ManagedChannel] =
+    NettyChannelBuilder
+      .forAddress("127.0.0.1", 9999)
+      .usePlaintext()
+      .resource[IO]
 
-//   resource.use: service =>
-//     List(PingRequest("PING"), PingRequest("PiNG"))
-//       .traverse: ping =>
-//         for
-//           response <- service.ping(ping, Metadata())
-//           _        <- IO.println(response)
-//         yield ()
-//       .void
-
-// val runServer: Resource[IO, Unit] =
-//   for
-//     service: ServerServiceDefinition <-
-//       PingerFs2Grpc.bindServiceResource[IO](???)
-
-//     _ <-
-//       NettyServerBuilder
-//         .forPort(9999)
-//         .addService(service)
-//         .resource[IO]
-//         .evalMap(server => IO(server.start()))
-//   yield ()
-
-// object Server extends IOApp.Simple:
-//   def run: IO[Unit] = runServer.useForever
-
-// object Client extends IOApp.Simple:
-//   def run: IO[Unit] = client
-
-object Main extends IOApp.Simple:
-  case class Foo(bar: Int, baz: String) derives Storeable
-
-  given Logger[IO] = Slf4jLogger.getLogger
-
-  def run: IO[Unit] =
-    SqlitePersistence[IO, Foo]("test.db", 2).use: (l, p) =>
-      l.rangeStream(Index.init + 3, Index.init + 100)
-        .chunks
-        .evalMap(IO.println)
-        .compile
-        .drain
+  val client: Resource[IO, StructerFs2Grpc[IO, Metadata]] =
+    managedChannelResource
+      .flatMap(ch => StructerFs2Grpc.stubResource[IO](ch))
