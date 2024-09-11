@@ -12,7 +12,7 @@ case class Config[F[_], A, S](
   persisted:         PersistedState[F],
   cluster:           Cluster[F, A, S],
   heartbeatEvery:    FiniteDuration,
-  timeout:           Timeout[F],
+  timeout:           ElectionTimeout[F],
   inputs:            InputSource[F, A, S],
   appenderBatchSize: Int
 )

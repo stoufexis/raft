@@ -98,7 +98,7 @@ object Candidate:
                 log.info(s"Majority votes collected")
 
               if config.cluster.isMajority(newNodes) then
-                Output(success as state.toLeader)
+                Output(success as state.toLeader(config.cluster.currentNode))
               else
                 Skip(voted as newNodes)
 

@@ -2,6 +2,7 @@ package com.stoufexis.raft
 
 import cats.effect.kernel.*
 import cats.effect.std.Supervisor
+import cats.implicits.given
 import cats.kernel.Monoid
 import fs2.Chunk
 
@@ -20,6 +21,14 @@ trait RaftNode[F[_], A, S]:
   def clientRequest(entries: Chunk[A]): F[ClientResponse[S]]
 
 object RaftNode:
+  def builder[F[_], A, S](
+    id:        NodeId,
+    automaton: (S, A) => S,
+    log:       Log[F, A],
+    persisted: PersistedState[F]
+  ): Builder[F, A, S] =
+    Builder(id, automaton, log, persisted)
+
   case class Builder[F[_], A, S](
     id:                    NodeId,
     automaton:             (S, A) => S,
@@ -47,36 +56,34 @@ object RaftNode:
       copy(appenderBatchSize = size)
 
     def build(using Async[F], Monoid[S]): Resource[F, RaftNode[F, A, S]] =
-      for
-        supervisor: Supervisor[F] <-
-          Supervisor[F](await = false)
+      Supervisor[F](await = false).evalMap: supervisor =>
+        for
+          inputs: Inputs[F, A, S] <-
+            Inputs(clientRequestsBuffer, incomingVotedBuffer, incomingAppendsBuffer)
 
-        inputs: Inputs[F, A, S] <-
-          Resource.eval(Inputs(clientRequestsBuffer, incomingVotedBuffer, incomingAppendsBuffer))
+          timeout: ElectionTimeout[F] <-
+            ElectionTimeout.fromRange[F](electionTimeoutLow, electionTimeoutHigh)
 
-        timeout: Timeout[F] <-
-          Resource.eval(Timeout.fromRange(electionTimeoutLow, electionTimeoutHigh))
+          cfg: Config[F, A, S] =
+            Config(
+              automaton         = automaton,
+              log               = log,
+              persisted         = persisted,
+              cluster           = Cluster(id, otherNodes),
+              heartbeatEvery    = heartbeatEvery,
+              timeout           = timeout,
+              inputs            = inputs,
+              appenderBatchSize = appenderBatchSize
+            )
 
-        cfg: Config[F, A, S] =
-          Config(
-            automaton         = automaton,
-            log               = log,
-            persisted         = persisted,
-            cluster           = Cluster(id, otherNodes),
-            heartbeatEvery    = heartbeatEvery,
-            timeout           = timeout,
-            inputs            = inputs,
-            appenderBatchSize = appenderBatchSize
-          )
+          _ <-
+            supervisor.supervise(StateMachine.runLoop(cfg))
+        yield new:
+          def requestVote(req: RequestVote): F[VoteResponse] =
+            inputs.requestVote(req)
 
-        _ <-
-          Resource.eval(supervisor.supervise(StateMachine.runLoop(cfg)))
-      yield new:
-        def requestVote(req: RequestVote): F[VoteResponse] =
-          inputs.requestVote(req)
+          def appendEntries(req: AppendEntries[A]): F[AppendResponse] =
+            inputs.appendEntries(req)
 
-        def appendEntries(req: AppendEntries[A]): F[AppendResponse] =
-          inputs.appendEntries(req)
-
-        def clientRequest(entries: Chunk[A]): F[ClientResponse[S]] =
-          inputs.clientRequest(entries)
+          def clientRequest(entries: Chunk[A]): F[ClientResponse[S]] =
+            inputs.clientRequest(entries)

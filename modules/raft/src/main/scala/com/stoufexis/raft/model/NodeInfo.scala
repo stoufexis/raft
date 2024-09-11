@@ -28,8 +28,8 @@ case class NodeInfo(
   def toCandidateNextTerm: NodeInfo =
     copy(role = Role.Candidate, term = term + 1)
 
-  def toLeader: NodeInfo =
-    copy(role = Role.Leader, knownLeader = Some(???))
+  def toLeader(currentNode: NodeId): NodeInfo =
+    copy(role = Role.Leader, knownLeader = Some(currentNode))
 
   def isNew(otherTerm: Term): Boolean =
     otherTerm > term
