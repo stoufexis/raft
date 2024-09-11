@@ -5,21 +5,10 @@ import com.stoufexis.raft.typeclass.IntLike.*
 case class NodeInfo(
   role:        Role,
   term:        Term,
-  knownLeader: Option[NodeId],
-  currentNode: NodeId,
-  otherNodes:  Set[NodeId]
+  knownLeader: Option[NodeId]
 ):
   def print: String =
     s"${role.toString}(term = ${term.toLong})"
-
-  def allNodes: Set[NodeId] =
-    otherNodes + currentNode
-
-  def majorityCnt: Int =
-    allNodes.size / 2 + 1
-
-  def isMajority(nodes: Set[NodeId]): Boolean =
-    (nodes intersect allNodes).size >= majorityCnt
 
   def toFollower(newTerm: Term, leaderId: NodeId): NodeInfo =
     copy(role = Role.Follower(None), term = newTerm, knownLeader = Some(leaderId))
@@ -40,7 +29,7 @@ case class NodeInfo(
     copy(role = Role.Candidate, term = term + 1)
 
   def toLeader: NodeInfo =
-    copy(role = Role.Leader, knownLeader = Some(currentNode))
+    copy(role = Role.Leader, knownLeader = Some(???))
 
   def isNew(otherTerm: Term): Boolean =
     otherTerm > term

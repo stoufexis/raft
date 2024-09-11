@@ -26,11 +26,10 @@ object WaitingClient:
     def enqueue(startIdx: Index, endIdx: Index, sink: DeferredSink[F, ClientResponse[S]]) =
       clients.enqueue(WaitingClient(startIdx, endIdx, sink))
 
-    def fulfill[A](commitIdx: Index, initS: S, automaton: (S, A) => S)(
+    def fulfill[A](commitIdx: Index, initS: S, automaton: (S, A) => S, log: Log[F, A])(
       using
-      F:   MonadThrow[F],
-      C:   Compiler[F, F],
-      log: Log[F, A]
+      F: MonadThrow[F],
+      C: Compiler[F, F]
     ): F[(Queue[WaitingClient[F, S]], S)] =
       def done(cl: Queue[WaitingClient[F, S]], s: S) =
         Pull.output1(cl, s) >> Pull.done
@@ -51,11 +50,10 @@ object WaitingClient:
               val nextClientsAcc: Queue[WaitingClient[F, S]] =
                 clients.dequeue._2
 
-              Pull.eval(head.sink.complete(ClientResponse.Executed(newS))) >> {
-                nextClientsAcc.dequeueOption match
+              Pull.eval(head.sink.complete(ClientResponse.Executed(newS))) >>
+                nextClientsAcc.dequeueOption.match
                   case Some((head, _)) => go(tail, newS, head, nextClientsAcc)
                   case None            => done(clients, newS)
-              }
             else
               go(tail, newS, head, clients)
 

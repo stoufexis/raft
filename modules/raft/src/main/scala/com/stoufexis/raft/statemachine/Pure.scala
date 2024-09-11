@@ -10,7 +10,7 @@ object Pure:
   def commitIdxFromMatch(externalNodes: Set[NodeId], matchIdxs: Map[NodeId, Index]): Option[Index] =
     matchIdxs
       .filter((n, _) => externalNodes(n))
+      .values
       .toVector
-      .map(_._2)
       .sorted(using Ordering[Index].reverse)
       .get(externalNodes.size / 2 - 1)

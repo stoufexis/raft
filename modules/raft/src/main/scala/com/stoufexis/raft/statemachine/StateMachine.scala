@@ -8,29 +8,12 @@ import fs2.concurrent.Channel
 import org.typelevel.log4cats.Logger
 
 import com.stoufexis.raft.model.*
-import com.stoufexis.raft.persist.*
-import com.stoufexis.raft.rpc.*
-
-import scala.concurrent.duration.FiniteDuration
 
 object StateMachine:
-  def runLoop[F[_], A, S](
-    currentNode:       NodeId,
-    otherNodes:        Set[NodeId],
-    heartbeatEvery:    FiniteDuration,
-    appenderBatchSize: Int,
-    automaton:         (S, A) => S
-  )(using
-    F:              Async[F],
-    monoid:         Monoid[S],
-    rpc:            RPC[F, A, S],
-    log:            Log[F, A],
-    timeout:        Timeout[F],
-    persistedState: PersistedState[F]
-  ): F[Nothing] =
+  def runLoop[F[_], A, S](config: Config[F, A, S])(using F: Async[F], M: Monoid[S]): F[Nothing] =
     def persistIfChanged(oldState: NodeInfo, newState: NodeInfo): F[Unit] =
       if oldState.term != newState.term || oldState.votedFor != newState.votedFor then
-        persistedState.persist(newState.term, newState.votedFor)
+        config.persisted.persist(newState.term, newState.votedFor)
       else
         F.unit
 
@@ -43,9 +26,9 @@ object StateMachine:
               .evalTap(_.info("Transitioned"))
 
           behaviors <- st.role match
-            case Role.Follower(_) => Resource.pure(Follower(st))
-            case Role.Candidate   => Resource.pure(Candidate(st))
-            case Role.Leader      => Leader(st, heartbeatEvery, appenderBatchSize, automaton)
+            case Role.Follower(_) => Resource.pure(Follower(st, config))
+            case Role.Candidate   => Resource.pure(Candidate(st, config))
+            case Role.Leader      => Leader(st, config)
         yield behaviors
 
       // Works like parJoinUnbounded, but reuses the same channel and only ever outputs 1 element
@@ -63,15 +46,13 @@ object StateMachine:
 
     for
       (lastTerm, lastVoted) <-
-        persistedState.readLatest
+        config.persisted.readLatest
 
       initState: NodeInfo =
         NodeInfo(
           role        = Role.Follower(lastVoted),
           term        = lastTerm,
-          knownLeader = None,
-          currentNode = currentNode,
-          otherNodes  = otherNodes
+          knownLeader = None
         )
 
       chan: Channel[F, NodeInfo] <-

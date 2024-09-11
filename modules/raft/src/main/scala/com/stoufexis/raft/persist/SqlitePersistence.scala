@@ -17,6 +17,7 @@ import com.stoufexis.raft.typeclass.Storeable
 import scala.reflect.ClassTag
 
 import java.sql.{Connection, DriverManager}
+import cats.effect.SyncIO
 
 object SqlitePersistence:
   /** Uses a single connection since there is no concurrent use.
