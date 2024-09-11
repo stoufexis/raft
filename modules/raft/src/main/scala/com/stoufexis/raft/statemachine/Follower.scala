@@ -13,15 +13,9 @@ import com.stoufexis.raft.typeclass.IntLike.*
 object Follower:
   def apply[F[_]: Temporal: Logger, A, S: Monoid](state: NodeInfo, config: Config[F, A, S]): Behaviors[F] =
     Behaviors(
-      clientRequests(state, config.inputs),
+      config.inputs.incomingClientRequests.respondWithLeader(state.knownLeader),
       appendsAndVotes(state, config)
     )
-
-  def clientRequests[F[_], A, S](state: NodeInfo, inputs: InputSource[F, A, S]): Stream[F, Nothing] =
-    inputs
-      .incomingClientRequests
-      .evalMap(_.sink.complete(ClientResponse.knownLeader(state.knownLeader)))
-      .drain
 
   /** Appends and votes are unified since the vote state machine needs to know the current index of the log.
     * Keeping it in the local loop is more efficient that always reading it from the log.

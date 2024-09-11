@@ -17,15 +17,9 @@ object Candidate:
   ): Behaviors[F] = Behaviors(
     appends(state, config.inputs),
     inVotes(state, config.inputs),
-    clientRequests(state, config.inputs),
+    config.inputs.incomingClientRequests.respondWithLeader(None),
     solicitVotes(state, config)
   )
-
-  def clientRequests[F[_], A, S](state: NodeInfo, inputs: InputSource[F, A, S]): Stream[F, Nothing] =
-    inputs
-      .incomingClientRequests
-      .evalMap(_.sink.complete(ClientResponse.knownLeader(state.knownLeader)))
-      .drain
 
   def appends[F[_]: Logger: MonadThrow, A, S](
     state:  NodeInfo,
