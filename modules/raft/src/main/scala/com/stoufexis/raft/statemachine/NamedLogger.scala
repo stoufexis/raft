@@ -4,7 +4,6 @@ import cats.effect.kernel.Sync
 import org.typelevel.log4cats.Logger
 import org.typelevel.log4cats.slf4j.Slf4jFactory
 
-import com.stoufexis.raft.model.NodeInfo
 import cats.implicits.given
 
 trait NamedLogger[F[_]]:

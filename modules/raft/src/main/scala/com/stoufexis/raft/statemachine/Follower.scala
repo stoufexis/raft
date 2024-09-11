@@ -6,23 +6,27 @@ import cats.implicits.given
 import fs2.*
 import org.typelevel.log4cats.Logger
 
-import com.stoufexis.raft.model.*
+import com.stoufexis.raft.persist.Log
 import com.stoufexis.raft.rpc.*
 import com.stoufexis.raft.typeclass.IntLike.*
+import com.stoufexis.raft.model.*
 
 object Follower:
-  def apply[F[_]: Temporal: Logger, A, S: Monoid](state: NodeInfo, config: Config[F, A, S]): Behaviors[F] =
+  def apply[F[_]: Temporal: Logger, A, S: Monoid](state: NodeInfo)(using cfg: Config[F, A, S]): Behaviors[F] =
     Behaviors(
-      config.inputs.incomingClientRequests.respondWithLeader(state.knownLeader),
-      appendsAndVotes(state, config)
+      cfg.inputs.incomingClientRequests.respondWithLeader(state.knownLeader),
+      appendsAndVotes(state)
     )
 
   /** Appends and votes are unified since the vote state machine needs to know the current index of the log.
     * Keeping it in the local loop is more efficient that always reading it from the log.
     */
-  def appendsAndVotes[F[_], A, S](state: NodeInfo, config: Config[F, A, S])(using
-    F:      Temporal[F],
-    logger: Logger[F]
+  def appendsAndVotes[F[_], A, S](state: NodeInfo)(using
+    F:       Temporal[F],
+    logger:  Logger[F],
+    log:     Log[F, A],
+    timeout: ElectionTimeout[F],
+    inputs:  InputSource[F, A, S]
   ): Stream[F, NodeInfo] =
     /** We can use the state.term, since we will always be writting using this term. If a new term is
       * observed, we transition to a follower of the next term.
@@ -31,11 +35,11 @@ object Follower:
       req.lastLogTerm > state.term || (req.lastLogTerm == state.term && req.lastLogIndex >= currentIndex)
 
     for
-      electionTimeout <- Stream.eval(config.timeout.nextElectionTimeout)
-      (_, initIdx)    <- Stream.eval(config.log.lastTermIndex)
+      electionTimeout <- Stream.eval(timeout.nextElectionTimeout)
+      (_, initIdx)    <- Stream.eval(log.lastTermIndex)
 
       out: NodeInfo <-
-        (config.inputs.incomingAppends mergeHaltBoth config.inputs.incomingVotes).resettableTimeoutAccumulate(
+        (inputs.incomingAppends mergeHaltBoth inputs.incomingVotes).resettableTimeoutAccumulate(
           init      = initIdx,
           onTimeout = F.pure(state.toCandidateNextTerm),
           timeout   = electionTimeout
@@ -50,7 +54,7 @@ object Follower:
             */
           case (i, IncomingAppend(req, sink)) if state.isCurrentLeader(req.term, req.leaderId) =>
             val append: F[Index] =
-              config.log.overwriteChunkIfMatches(req.prevLogTerm, req.prevLogIndex, req.term, req.entries)
+              log.overwriteChunkIfMatches(req.prevLogTerm, req.prevLogIndex, req.term, req.entries)
                 .flatMap:
                   case None       => req.inconsistent(sink) as i
                   case Some(newI) => req.accepted(sink) as newI

@@ -7,22 +7,19 @@ import fs2.*
 import org.typelevel.log4cats.Logger
 
 import com.stoufexis.raft.*
-import com.stoufexis.raft.model.*
 import com.stoufexis.raft.rpc.*
+import com.stoufexis.raft.model.*
 
 object Candidate:
-  def apply[F[_], A, S: Monoid](state: NodeInfo, config: Config[F, A, S])(using
-    Temporal[F],
-    Logger[F]
-  ): Behaviors[F] = Behaviors(
-    appends(state, config.inputs),
-    inVotes(state, config.inputs),
-    config.inputs.incomingClientRequests.respondWithLeader(None),
-    solicitVotes(state, config)
-  )
+  def apply[F[_]: Logger: Temporal, A, S: Monoid](state: NodeInfo)(using cfg: Config[F, A, S]): Behaviors[F] =
+    Behaviors(
+      appends(state),
+      inVotes(state),
+      cfg.inputs.incomingClientRequests.respondWithLeader(None),
+      solicitVotes(state)
+    )
 
-  def appends[F[_]: Logger: MonadThrow, A, S](
-    state:  NodeInfo,
+  def appends[F[_]: Logger: MonadThrow, A, S](state: NodeInfo)(using
     inputs: InputSource[F, A, S]
   ): Stream[F, NodeInfo] =
     inputs.incomingAppends.evalMapFirstSome:
@@ -35,8 +32,7 @@ object Candidate:
       case IncomingAppend(req, sink) =>
         Some(state.toFollower(req.term, req.leaderId)).pure[F]
 
-  def inVotes[F[_]: Logger: MonadThrow, A, S](
-    state:  NodeInfo,
+  def inVotes[F[_]: Logger: MonadThrow, A, S](state: NodeInfo)(using
     inputs: InputSource[F, A, S]
   ): Stream[F, NodeInfo] =
     inputs.incomingVotes.evalMapFirstSome:
@@ -57,9 +53,10 @@ object Candidate:
   /** No appends happen in this state, so we can always use the last idx and term found in the log for the
     * election.
     */
-  def solicitVotes[F[_], A, S](state: NodeInfo, config: Config[F, A, S])(using
-    F:   Temporal[F],
-    log: Logger[F]
+  def solicitVotes[F[_], A, S](state: NodeInfo)(using
+    F:      Temporal[F],
+    log:    Logger[F],
+    config: Config[F, A, S]
   ): Stream[F, NodeInfo] =
     import ResettableTimeout.*
 
@@ -92,7 +89,7 @@ object Candidate:
                 log.info(s"Majority votes collected")
 
               if config.cluster.isMajority(newNodes) then
-                Output(success as state.toLeader(config.cluster.currentNode))
+                Output(success as state.toLeader)
               else
                 Skip(voted as newNodes)
 

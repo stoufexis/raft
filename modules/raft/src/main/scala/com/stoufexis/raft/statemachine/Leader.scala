@@ -8,12 +8,12 @@ import org.typelevel.log4cats.Logger
 
 import com.stoufexis.raft.*
 import com.stoufexis.raft.ExternalNode
-import com.stoufexis.raft.model.*
 import com.stoufexis.raft.rpc.*
 import com.stoufexis.raft.typeclass.IntLike.*
 
 import scala.collection.immutable.Queue
 import scala.concurrent.duration.FiniteDuration
+import com.stoufexis.raft.model.*
 
 object Leader:
 
@@ -27,8 +27,7 @@ object Leader:
     * replicate the log. The state machine in other nodes is reconstructed from the log if they become the
     * leader. TODO: I think this means I can get rid of the leaderCommit in AppendEntries requests
     */
-  def apply[F[_]: Temporal: Logger, A, S: Monoid](
-    state:  NodeInfo,
+  def apply[F[_]: Temporal: Logger, A, S: Monoid](state: NodeInfo)(using
     config: Config[F, A, S]
   ): Resource[F, Behaviors[F]] =
     for
@@ -50,15 +49,14 @@ object Leader:
 
       inputs: Behaviors[F] =
         Behaviors(
-          appends(state, config.inputs),
-          votes(state, config.inputs),
+          appends(state),
+          votes(state),
           partitionChecker(state, matchIdxs, config),
-          stateMachine(state, matchIdxs, newIdxs, config)
+          stateMachine(state, matchIdxs, newIdxs)
         )
     yield inputs ++ appenders
 
-  def votes[F[_]: MonadThrow: Logger, A, S](
-    state:  NodeInfo,
+  def votes[F[_]: MonadThrow: Logger, A, S](state: NodeInfo)(using
     inputs: InputSource[F, A, S]
   ): Stream[F, NodeInfo] =
     inputs.incomingVotes.evalMapFirstSome:
@@ -74,8 +72,7 @@ object Leader:
       case IncomingVote(req, sink) =>
         Some(state.toFollowerUnknownLeader(req.term)).pure[F]
 
-  def appends[F[_]: MonadThrow: Logger, A, S](
-    state:  NodeInfo,
+  def appends[F[_]: MonadThrow: Logger, A, S](state: NodeInfo)(using
     inputs: InputSource[F, A, S]
   ): Stream[F, NodeInfo] =
     inputs.incomingAppends.evalMapFirstSome:
@@ -111,11 +108,11 @@ object Leader:
   def stateMachine[F[_], A, S: Monoid](
     state:    NodeInfo,
     matchIdx: CloseableTopic[F, (NodeId, Index)],
-    newIdxs:  CloseableTopic[F, Index],
-    config:   Config[F, A, S]
+    newIdxs:  CloseableTopic[F, Index]
   )(using
     F:      Temporal[F],
-    logger: Logger[F]
+    logger: Logger[F],
+    config: Config[F, A, S]
   ): Stream[F, Nothing] =
     for
       initIdx <- Stream.eval(config.log.lastTermIndex.map(_._2))

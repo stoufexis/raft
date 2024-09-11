@@ -1,5 +1,6 @@
-package com.stoufexis.raft.model
+package com.stoufexis.raft.statemachine
 
+import com.stoufexis.raft.model.*
 import com.stoufexis.raft.typeclass.IntLike.*
 
 case class NodeInfo(
@@ -28,8 +29,8 @@ case class NodeInfo(
   def toCandidateNextTerm: NodeInfo =
     copy(role = Role.Candidate, term = term + 1)
 
-  def toLeader(currentNode: NodeId): NodeInfo =
-    copy(role = Role.Leader, knownLeader = Some(currentNode))
+  def toLeader(using cluster: Cluster[?, ?, ?]): NodeInfo =
+    copy(role = Role.Leader, knownLeader = Some(cluster.currentNode))
 
   def isNew(otherTerm: Term): Boolean =
     otherTerm > term

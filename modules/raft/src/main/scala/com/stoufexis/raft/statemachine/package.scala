@@ -7,12 +7,12 @@ import cats.implicits.given
 import fs2.*
 import org.typelevel.log4cats.Logger
 
-import com.stoufexis.raft.model.*
 import com.stoufexis.raft.rpc.*
 import com.stoufexis.raft.typeclass.IntLike
 import com.stoufexis.raft.typeclass.IntLike.*
 
 import scala.concurrent.duration.FiniteDuration
+import com.stoufexis.raft.model.*
 
 extension [F[_]: Monad, A](deferred: DeferredSink[F, A])
   def complete_(a: A): F[Unit] = deferred.complete(a).void

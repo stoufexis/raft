@@ -6,8 +6,6 @@ import cats.implicits.given
 import fs2.*
 import fs2.concurrent.Channel
 
-import com.stoufexis.raft.model.NodeInfo
-
 case class Behaviors[F[_]](streams: Seq[Stream[F, NodeInfo]]):
   def parPublish(chan: Channel[F, NodeInfo])(using Concurrent[F]): F[Unit] =
     streams.parTraverse_(_.evalTap(chan.send(_).void).compile.drain)

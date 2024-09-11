@@ -64,7 +64,7 @@ object RaftNode:
           timeout: ElectionTimeout[F] <-
             ElectionTimeout.fromRange[F](electionTimeoutLow, electionTimeoutHigh)
 
-          cfg: Config[F, A, S] =
+          given Config[F, A, S] =
             Config(
               automaton         = automaton,
               log               = log,
@@ -77,7 +77,7 @@ object RaftNode:
             )
 
           _ <-
-            supervisor.supervise(StateMachine.runLoop(cfg))
+            supervisor.supervise(StateMachine.runLoop)
         yield new:
           def requestVote(req: RequestVote): F[VoteResponse] =
             inputs.requestVote(req)
