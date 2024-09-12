@@ -26,16 +26,17 @@ object WaitingClient:
     def enqueue(startIdx: Index, endIdx: Index, sink: DeferredSink[F, ClientResponse[S]]) =
       clients.enqueue(WaitingClient(startIdx, endIdx, sink))
 
-    def fulfill[A](commitIdx: Index, initS: S, automaton: (S, A) => S, log: Log[F, A])(
+    def fulfill[A](commitIdx: Index, initS: S, automaton: (S, A) => S)(
       using
-      F: MonadThrow[F],
-      C: Compiler[F, F]
+      log: Log[F, A],
+      F:   MonadThrow[F],
+      C:   Compiler[F, F]
     ): F[(Queue[WaitingClient[F, S]], S)] =
       def done(cl: Queue[WaitingClient[F, S]], s: S) =
         Pull.output1(cl, s) >> Pull.done
 
       def go(
-        stream:  Stream[F, (Index, A)],
+        stream:  Stream[F, (Index, Command[A])],
         acc:     S,
         head:    WaitingClient[F, S],
         clients: Queue[WaitingClient[F, S]]
@@ -43,8 +44,8 @@ object WaitingClient:
         stream.pull.uncons1.flatMap:
           case None => done(clients, acc)
 
-          case Some(((index, a), tail)) =>
-            val newS: S = automaton(acc, a)
+          case Some(((index, e), tail)) =>
+            val newS: S = automaton(acc, e.value)
 
             if index >= head.endIdx then
               val nextClientsAcc: Queue[WaitingClient[F, S]] =

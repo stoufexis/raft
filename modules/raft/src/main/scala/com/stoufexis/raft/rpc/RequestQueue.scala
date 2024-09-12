@@ -56,11 +56,8 @@ object RequestQueue:
   )(using F: Concurrent[F]):
     def tryOffer(a: A): F[Option[Long]] =
       ref.modify:
-        case state if state.elems.size >= bound =>
-          (state, None)
-        case state =>
-          val i2 = state.idx + 1
-          state.copy(idx = i2, elems = state.elems.updated(i2, a)) -> Some(i2)
+        case state if state.elems.size >= bound => (state, None)
+        case state                              => state.newElem(a).fmap(Some(_))
 
     def offer(a: A): F[Long] =
       def loop(offerrer: Deferred[F, Unit]): F[Long] =

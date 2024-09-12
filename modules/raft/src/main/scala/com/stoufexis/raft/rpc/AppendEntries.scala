@@ -9,5 +9,5 @@ case class AppendEntries[A](
   term:         Term,
   prevLogIndex: Index,
   prevLogTerm:  Term,
-  entries:      Chunk[A]
+  entries:      Chunk[Command[A]]
 )

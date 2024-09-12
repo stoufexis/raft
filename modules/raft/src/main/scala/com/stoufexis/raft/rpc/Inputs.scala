@@ -4,6 +4,8 @@ import cats.effect.*
 import cats.implicits.given
 import fs2.*
 
+import com.stoufexis.raft.model.Command
+
 trait InputSource[F[_], A, S]:
   def incomingVotes: Stream[F, IncomingVote[F]]
 
@@ -16,7 +18,7 @@ trait InputSink[F[_], A, S]:
 
   def appendEntries(req: AppendEntries[A]): F[AppendResponse]
 
-  def clientRequest(entries: Chunk[A]): F[ClientResponse[S]]
+  def clientRequest(entry: Option[Command[A]]): F[ClientResponse[S]]
 
 /** Should handle retries. Should make sure that received messages are from nodes within the cluster, so only
   * known NodeIds.
@@ -32,7 +34,7 @@ object Inputs:
     for
       vq <- RequestQueue[F, RequestVote, VoteResponse](incomingVotedBuffer)
       aq <- RequestQueue[F, AppendEntries[A], AppendResponse](incomingAppendsBuffer)
-      cq <- RequestQueue[F, Chunk[A], ClientResponse[S]](clientRequestsBuffer)
+      cq <- RequestQueue[F, Option[Command[A]], ClientResponse[S]](clientRequestsBuffer)
     yield new:
       def incomingVotes: Stream[F, IncomingVote[F]] =
         vq.consume.map(IncomingVote(_, _))
@@ -49,5 +51,5 @@ object Inputs:
       def appendEntries(req: AppendEntries[A]): F[AppendResponse] =
         aq.offer(req)
 
-      def clientRequest(entries: Chunk[A]): F[ClientResponse[S]] =
-        cq.offer(entries)
+      def clientRequest(entry: Option[Command[A]]): F[ClientResponse[S]] =
+        cq.offer(entry)

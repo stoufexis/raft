@@ -4,9 +4,8 @@ import cats.effect.kernel.*
 import cats.effect.std.Supervisor
 import cats.implicits.given
 import cats.kernel.Monoid
-import fs2.Chunk
 
-import com.stoufexis.raft.model.NodeId
+import com.stoufexis.raft.model.*
 import com.stoufexis.raft.persist.*
 import com.stoufexis.raft.rpc.*
 import com.stoufexis.raft.statemachine.*
@@ -18,7 +17,11 @@ trait RaftNode[F[_], A, S]:
 
   def appendEntries(req: AppendEntries[A]): F[AppendResponse]
 
-  def clientRequest(entries: Chunk[A]): F[ClientResponse[S]]
+  def clientWrite(client: ClientId, serial: SerialNr, entry: A): F[ClientResponse[S]]
+
+  def clientWriteNonLinearizable(entry: A): F[ClientResponse[S]]
+
+  def clientRead: F[ClientResponse[S]]
 
 object RaftNode:
   def builder[F[_], A, S](
@@ -85,5 +88,11 @@ object RaftNode:
           def appendEntries(req: AppendEntries[A]): F[AppendResponse] =
             inputs.appendEntries(req)
 
-          def clientRequest(entries: Chunk[A]): F[ClientResponse[S]] =
-            inputs.clientRequest(entries)
+          def clientWrite(client: ClientId, serial: SerialNr, entry: A): F[ClientResponse[S]] =
+            inputs.clientRequest(Some(Command(Some(CommandId(client, serial)), entry)))
+
+          def clientWriteNonLinearizable(entry: A): F[ClientResponse[S]] =
+            inputs.clientRequest(Some(Command(None, entry)))
+
+          def clientRead: F[ClientResponse[S]] =
+            inputs.clientRequest(None)

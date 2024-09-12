@@ -8,12 +8,13 @@ import org.typelevel.log4cats.Logger
 
 import com.stoufexis.raft.*
 import com.stoufexis.raft.ExternalNode
+import com.stoufexis.raft.model.*
+import com.stoufexis.raft.persist.*
 import com.stoufexis.raft.rpc.*
 import com.stoufexis.raft.typeclass.IntLike.*
 
 import scala.collection.immutable.Queue
 import scala.concurrent.duration.FiniteDuration
-import com.stoufexis.raft.model.*
 
 object Leader:
 
@@ -123,7 +124,7 @@ object Leader:
           .log
           .rangeStream(Index.init, initIdx)
           .fold((Index.init, Monoid[S].empty)):
-            case ((_, s), (index, a)) => (index, config.automaton(s, a))
+            case ((_, s), (index, e)) => (index, config.automaton(s, e.value))
 
       // Assumes that matchIdxs for each node always increase
       commitIdx: Stream[F, Index] =
@@ -146,14 +147,19 @@ object Leader:
         commitsAndAppends.evalScanDrain(acc):
           case ((clients, idxEnd, s), Left(commitIdx)) =>
             clients
-              .fulfill(commitIdx, s, config.automaton, config.log)
+              .fulfill(commitIdx, s, config.automaton)
               .map((_, idxEnd, _))
 
-          case ((clients, idxEnd, s), Right(req)) =>
-            for
-              newIdx <- config.log.appendChunk(state.term, idxEnd, req.entries)
-              _      <- newIdxs.publish(newIdx)
-            yield (clients.enqueue(idxEnd + 1, newIdx, req.sink), newIdx, s)
+          case (acc @ (clients, idxEnd, s), Right(req)) =>
+            config.log.append(state.term, idxEnd, req.entry).flatMap:
+              case Left(AppendFailure.CommandExists) =>
+                req.sink.complete(ClientResponse.Skipped(s)) as acc
+
+              case Left(AppendFailure.SerialGap(nr)) =>
+                req.sink.complete(ClientResponse.SerialGap(nr)) as acc
+
+              case Right(newIdx) =>
+                newIdxs.publish(newIdx) as (clients.enqueue(idxEnd + 1, newIdx, req.sink), newIdx, s)
     yield out
 
   /** If the majority of the cluster is not reached with any request for an electionTimeout, demote self to
@@ -240,7 +246,7 @@ object Leader:
         val startIdx: Index = matchIdx + 1
         val endIdx:   Index = startIdx + config.appenderBatchSize
 
-        val info: F[(Term, Chunk[A])] =
+        val info: F[(Term, Chunk[Command[A]])] =
           config.log.term(matchIdx).product:
             if seek
             then F.pure(Chunk.empty)

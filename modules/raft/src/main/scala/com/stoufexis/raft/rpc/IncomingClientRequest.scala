@@ -1,9 +1,10 @@
 package com.stoufexis.raft.rpc
 
 import cats.effect.kernel.DeferredSink
-import fs2.*
+
+import com.stoufexis.raft.model.Command
 
 case class IncomingClientRequest[F[_], A, S](
-  entries: Chunk[A],
-  sink:    DeferredSink[F, ClientResponse[S]]
+  entry: Option[Command[A]],
+  sink:  DeferredSink[F, ClientResponse[S]]
 )

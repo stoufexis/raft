@@ -4,26 +4,32 @@ import fs2.*
 
 import com.stoufexis.raft.model.*
 
+enum AppendFailure derives CanEqual:
+  case CommandExists
+  case SerialGap(previous: SerialNr)
+
 trait Log[F[_], A]:
-  // empty chunk should advance the index. User for linearizable reads
-  // prevIdx is the expected index of the currently last entry in the log
-  // it overwrites all entries after prevIdx with the new entries
+  // None entry should simply advance the index. User for linearizable reads
   // Returns the new last index of the log
   // Throws if prevIdx is not the current last index
-  def appendChunk(term: Term, prevIdx: Index, entries: Chunk[A]): F[Index]
+  def append(
+    term:    Term,
+    prevIdx: Index,
+    entry:   Option[Command[A]]
+  ): F[Either[AppendFailure, Index]]
 
   def overwriteChunkIfMatches(
     prevLogTerm:  Term,
     prevLogIndex: Index,
     term:         Term,
-    entries:      Chunk[A]
+    entries:      Chunk[Command[A]]
   ): F[Option[Index]]
 
   /** Inclusive range
     */
-  def range(from: Index, until: Index): F[Chunk[A]]
+  def range(from: Index, until: Index): F[Chunk[Command[A]]]
 
-  def rangeStream(from: Index, until: Index): Stream[F, (Index, A)]
+  def rangeStream(from: Index, until: Index): Stream[F, (Index, Command[A])]
 
   def lastTermIndex: F[(Term, Index)]
 
