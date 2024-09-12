@@ -25,6 +25,7 @@ import scala.annotation.unused
 import scala.collection.immutable.HashMap
 import scala.collection.mutable.ArrayBuilder
 import scala.concurrent.duration.*
+import com.stoufexis.raft.rpc.RequestQueue.Unprocessed
 
 /*
   TODOS For leader
@@ -111,3 +112,24 @@ object StructerServiceImpl:
   val client: Resource[IO, StructerFs2Grpc[IO, Metadata]] =
     managedChannelResource
       .flatMap(ch => StructerFs2Grpc.stubResource[IO](ch))
+
+object Main extends IOApp.Simple:
+  def run: IO[Unit] =
+    for
+      up <- Unprocessed[IO, String](3)
+      a  <- up.offer("A")
+      b  <- up.offer("B")
+      c  <- up.offer("C")
+      _  <- IO.println("MARKER")
+      _  <- IO.sleep(1.second)
+      _  <- up.offer("D").start
+      _  <- IO.sleep(1.second)
+      _  <- up.offer("E").start
+      _  <- IO.sleep(1.second)
+      _  <- up.offer("F").start
+      _  <- IO.sleep(1.second)
+      _  <- Stream(a,b,c).parEvalMapUnbounded(up.drop).compile.drain
+      _  <- IO.sleep(1.second)
+      _  <- up.print
+      _  <- IO.readLine
+    yield ()
