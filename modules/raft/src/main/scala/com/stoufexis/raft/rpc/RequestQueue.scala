@@ -54,46 +54,45 @@ object RequestQueue:
     ref:   SignallingRef[F, State[F, A]],
     bound: Int
   )(using F: Concurrent[F]):
+
     def tryOffer(a: A): F[Option[Long]] =
       ref.modify:
-        case state if state.elems.size >= bound => (state, None)
-        case state                              => state.newElem(a).fmap(Some(_))
+        case state if state.elems.size >= bound =>
+          (state, None)
 
-    def offer(a: A): F[Long] =
-      def loop(offerrer: Deferred[F, Unit]): F[Long] =
-        F.uncancelable: poll =>
-          val dequeueSelf: F[Unit] =
-            ref.update(_.excludeOfferrer(offerrer))
+        case state =>
+          val i2 = state.idx + 1
+          state.copy(idx = i2, elems = state.elems.updated(i2, a))
+            -> Some(i2)
 
-          val dequeueSelfWakeupNext: F[Unit] =
-            ref.flatModify:
-              case state if state.elems.size < bound =>
-                val newState: State[F, A] =
-                  state.excludeOfferrer(offerrer)
+    def offer(a: A): F[Long] = F.uncancelable: poll =>
+      F.deferred[Long].flatMap: offerrer =>
+        val cleanup: F[Unit] =
+          ref.update(s => s.copy(offerrers = s.offerrers.filterNot(_._2 eq offerrer)))
 
-                newState -> newState.nextOfferrer.match
-                  case None       => F.unit
-                  case Some(next) => next.complete(()).void
+        ref.flatModify:
+          case state if state.elems.size >= bound =>
+            state.copy(offerrers = state.offerrers.enqueue(a, offerrer))
+              -> poll(offerrer.get).onCancel(cleanup)
 
-              case state =>
-                state.excludeOfferrer(offerrer) -> F.unit
-
-          ref.flatModify:
-            case state if state.elems.size >= bound =>
-              state.enqueueOfferrer(offerrer)
-                -> poll(offerrer.get >> loop(offerrer)).onCancel(dequeueSelf)
-
-            case state =>
-              val (s, i2) = state.newElem(a)
-              s -> dequeueSelfWakeupNext.as(i2)
-
-      F.deferred[Unit].flatMap(loop)
+          case state =>
+            // Assuming an average of 1000 requests a second, which is already too many,
+            // this will overflow at just under 300_000_000 years. Nothing to be done about overflows...
+            val i2 = state.idx + 1
+            state.copy(idx = i2, elems = state.elems.updated(i2, a))
+              -> F.pure(i2)
 
     def drop(idx: Long): F[Unit] = F.uncancelable: _ =>
       ref.flatModify: state =>
-        state.dropElem(idx) -> state.nextOfferrer.match
-          case None           => F.unit
-          case Some(offerrer) => offerrer.complete(()).void
+        if state.offerrers.isEmpty then
+          state.copy(elems = state.elems.removed(idx))
+            -> F.unit
+        else
+          val ((elem, sink), rest) = state.offerrers.dequeue
+          val i                    = state.idx + 1
+          val updated              = state.elems.removed(idx).updated(i, elem)
+          state.copy(elems = updated, offerrers = rest, idx = i)
+            -> sink.complete(i).void
 
     // TODO: test
     def read(using ClassTag[A]): Stream[F, A] =
@@ -113,27 +112,9 @@ object RequestQueue:
         ref <- SignallingRef[F].of[State[F, A]](State.empty)
       yield new Unprocessed(ref, bound)
 
-  case class State[F[_], A](idx: Long, elems: Map[Long, A], offerrers: ScalaQueue[Deferred[F, Unit]]):
+  case class State[F[_], A](idx: Long, elems: Map[Long, A], offerrers: ScalaQueue[(A, Deferred[F, Long])]):
     def elemsBetween(start: Long, end: Long)(using ClassTag[A]): Chunk[A] =
       Chunk.iterator(Iterator.range(start, end + 1).flatMap(elems.get))
-
-    def excludeOfferrer(d: Deferred[F, Unit]): State[F, A] =
-      copy(offerrers = offerrers.filterNot(_ eq d))
-
-    def enqueueOfferrer(d: Deferred[F, Unit]): State[F, A] =
-      copy(offerrers = offerrers.enqueue(d))
-
-    def nextOfferrer: Option[Deferred[F, Unit]] =
-      offerrers.dequeueOption.map(_._1)
-
-    def newElem(elem: A): (State[F, A], Long) =
-      // Assuming an average of 1000 requests a second, which is already too many,
-      // this will overflow at just under 300_000_000 years. Nothing to be done about overflows...
-      val i2 = idx + 1
-      copy(idx = i2, elems = elems.updated(i2, elem)) -> i2
-
-    def dropElem(idx: Long): State[F, A] =
-      copy(elems = elems.removed(idx))
 
   object State:
     def empty[F[_], A]: State[F, A] = State(0, Map.empty, ScalaQueue.empty)
