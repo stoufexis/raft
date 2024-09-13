@@ -22,7 +22,7 @@ object CloseableTopic:
       _        <- Resource.onFinalize(shutdown.complete(()).void >> topic.close.void)
     yield new:
       def subscribeUnbounded: Stream[F, A] =
-        subscribe(Int.MaxValue) // this is how the fs2 topic also does it
+        subscribe(Int.MaxValue) // this is how the fs2 Topic also does it
 
       def subscribe(bound: Int): Stream[F, A] =
         topic.subscribe(bound).interruptWhen(shutdown.get.attempt)

@@ -1,3 +1,3 @@
 package com.stoufexis.raft.model
 
-case class CommandId(client: ClientId, serial: SerialNr)
+opaque type CommandId = String

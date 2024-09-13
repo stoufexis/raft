@@ -17,9 +17,7 @@ trait RaftNode[F[_], A, S]:
 
   def appendEntries(req: AppendEntries[A]): F[AppendResponse]
 
-  def clientWrite(client: ClientId, serial: SerialNr, entry: A): F[ClientResponse[S]]
-
-  def clientWriteNonLinearizable(entry: A): F[ClientResponse[S]]
+  def clientWrite(cid: CommandId, entry: A): F[ClientResponse[S]]
 
   def clientRead: F[ClientResponse[S]]
 
@@ -88,11 +86,8 @@ object RaftNode:
           def appendEntries(req: AppendEntries[A]): F[AppendResponse] =
             inputs.appendEntries(req)
 
-          def clientWrite(client: ClientId, serial: SerialNr, entry: A): F[ClientResponse[S]] =
-            inputs.clientRequest(Some(Command(Some(CommandId(client, serial)), entry)))
-
-          def clientWriteNonLinearizable(entry: A): F[ClientResponse[S]] =
-            inputs.clientRequest(Some(Command(None, entry)))
+          def clientWrite(cid: CommandId, entry: A): F[ClientResponse[S]] =
+            inputs.clientRequest(Some(Command(cid, entry)))
 
           def clientRead: F[ClientResponse[S]] =
             inputs.clientRequest(None)

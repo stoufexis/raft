@@ -152,13 +152,10 @@ object Leader:
 
           case (acc @ (clients, idxEnd, s), Right(req)) =>
             config.log.append(state.term, idxEnd, req.entry).flatMap:
-              case Left(AppendFailure.CommandExists) =>
+              case None =>
                 req.sink.complete(ClientResponse.Skipped(s)) as acc
 
-              case Left(AppendFailure.SerialGap(nr)) =>
-                req.sink.complete(ClientResponse.SerialGap(nr)) as acc
-
-              case Right(newIdx) =>
+              case Some(newIdx) =>
                 newIdxs.publish(newIdx) as (clients.enqueue(idxEnd + 1, newIdx, req.sink), newIdx, s)
     yield out
 
