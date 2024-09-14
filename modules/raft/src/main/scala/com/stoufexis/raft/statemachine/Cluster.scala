@@ -3,9 +3,9 @@ package com.stoufexis.raft.statemachine
 import com.stoufexis.raft.ExternalNode
 import com.stoufexis.raft.model.*
 
-case class Cluster[F[_], A, S](
+case class Cluster[F[_], In, S](
   currentNode: NodeId,
-  otherNodes:  List[ExternalNode[F, A, S]]
+  otherNodes:  List[ExternalNode[F, In, S]]
 ):
   lazy val allNodes: Set[NodeId] =
     otherNodes.map(_.id).toSet + currentNode

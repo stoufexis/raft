@@ -11,7 +11,7 @@ import com.stoufexis.raft.rpc.*
 import com.stoufexis.raft.model.*
 
 object Candidate:
-  def apply[F[_]: Logger: Temporal, A, S: Monoid](state: NodeInfo)(using cfg: Config[F, A, S]): Behaviors[F] =
+  def apply[F[_]: Logger: Temporal, In, S: Monoid](state: NodeInfo)(using cfg: Config[F, In, ?, S]): Behaviors[F] =
     Behaviors(
       appends(state),
       inVotes(state),
@@ -19,8 +19,8 @@ object Candidate:
       solicitVotes(state)
     )
 
-  def appends[F[_]: Logger: MonadThrow, A, S](state: NodeInfo)(using
-    inputs: InputSource[F, A, S]
+  def appends[F[_]: Logger: MonadThrow, In, S](state: NodeInfo)(using
+    inputs: InputSource[F, In, ?, S]
   ): Stream[F, NodeInfo] =
     inputs.incomingAppends.evalMapFirstSome:
       case IncomingAppend(req, sink) if state.isExpired(req.term) =>
@@ -32,8 +32,8 @@ object Candidate:
       case IncomingAppend(req, sink) =>
         Some(state.toFollower(req.term, req.leaderId)).pure[F]
 
-  def inVotes[F[_]: Logger: MonadThrow, A, S](state: NodeInfo)(using
-    inputs: InputSource[F, A, S]
+  def inVotes[F[_]: Logger: MonadThrow, In, S](state: NodeInfo)(using
+    inputs: InputSource[F, In, ?, S]
   ): Stream[F, NodeInfo] =
     inputs.incomingVotes.evalMapFirstSome:
       case IncomingVote(req, sink) if state.isExpired(req.term) =>
@@ -53,10 +53,10 @@ object Candidate:
   /** No appends happen in this state, so we can always use the last idx and term found in the log for the
     * election.
     */
-  def solicitVotes[F[_], A, S](state: NodeInfo)(using
+  def solicitVotes[F[_], In, S](state: NodeInfo)(using
     F:      Temporal[F],
     log:    Logger[F],
-    config: Config[F, A, S]
+    config: Config[F, In, ?, S]
   ): Stream[F, NodeInfo] =
     import ResettableTimeout.*
 
@@ -65,7 +65,7 @@ object Candidate:
       (lastLogTerm, lastLogIdx) <- Stream.eval(config.log.lastTermIndex)
 
       out: NodeInfo <-
-        def req(node: ExternalNode[F, A, S]): F[(NodeId, VoteResponse)] =
+        def req(node: ExternalNode[F, In, S]): F[(NodeId, VoteResponse)] =
           node
             .requestVote(RequestVote(config.cluster.currentNode, state.term, lastLogIdx, lastLogTerm))
             .tupleLeft(node.id)

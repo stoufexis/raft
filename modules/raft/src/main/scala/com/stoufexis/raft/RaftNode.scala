@@ -12,60 +12,58 @@ import com.stoufexis.raft.statemachine.*
 
 import scala.concurrent.duration.*
 
-trait RaftNode[F[_], A, S]:
+trait RaftNode[F[_], In, Out, S]:
   def requestVote(req: RequestVote): F[VoteResponse]
 
-  def appendEntries(req: AppendEntries[A]): F[AppendResponse]
+  def appendEntries(req: AppendEntries[In]): F[AppendResponse]
 
-  def clientWrite(cid: CommandId, entry: A): F[ClientResponse[S]]
-
-  def clientRead: F[ClientResponse[S]]
+  def clientRequest(cid: CommandId, entry: In): F[ClientResponse[Out, S]]
 
 object RaftNode:
-  def builder[F[_], A, S](
+  def builder[F[_], In, Out, S](
     id:        NodeId,
-    automaton: (S, A) => S,
-    log:       Log[F, A],
+    automaton: (S, In) => (S, Out),
+    log:       Log[F, In],
     persisted: PersistedState[F]
-  ): Builder[F, A, S] =
+  ): Builder[F, In, Out, S] =
     Builder(id, automaton, log, persisted)
 
-  case class Builder[F[_], A, S](
+  case class Builder[F[_], In, Out, S](
     id:                    NodeId,
-    automaton:             (S, A) => S,
-    log:                   Log[F, A],
+    automaton:             (S, In) => (S, Out),
+    log:                   Log[F, In],
     persisted:             PersistedState[F],
-    otherNodes:            List[ExternalNode[F, A, S]] = Nil,
-    heartbeatEvery:        FiniteDuration              = 100.millis,
-    electionTimeoutLow:    FiniteDuration              = 500.millis,
-    electionTimeoutHigh:   FiniteDuration              = 1.second,
-    appenderBatchSize:     Int                         = 10,
-    clientRequestsBuffer:  Int                         = 10,
-    incomingVotedBuffer:   Int                         = 1,
-    incomingAppendsBuffer: Int                         = 1
+    otherNodes:            List[ExternalNode[F, In, S]] = Nil,
+    heartbeatEvery:        FiniteDuration               = 100.millis,
+    electionTimeoutLow:    FiniteDuration               = 500.millis,
+    electionTimeoutHigh:   FiniteDuration               = 1.second,
+    appenderBatchSize:     Int                          = 10,
+    clientRequestsBuffer:  Int                          = 10,
+    incomingVotedBuffer:   Int                          = 1,
+    incomingAppendsBuffer: Int                          = 1
   ):
-    def withExternals(nodes: ExternalNode[F, A, S]*): Builder[F, A, S] =
+    def withExternals(nodes: ExternalNode[F, In, S]*): Builder[F, In, Out, S] =
       copy(otherNodes = otherNodes ++ nodes)
 
-    def withHeartbeatEvery(heartbeatEvery: FiniteDuration): Builder[F, A, S] =
+    def withHeartbeatEvery(heartbeatEvery: FiniteDuration): Builder[F, In, Out, S] =
       copy(heartbeatEvery = heartbeatEvery)
 
-    def withElectionTimeout(from: FiniteDuration, until: FiniteDuration): Builder[F, A, S] =
+    def withElectionTimeout(from: FiniteDuration, until: FiniteDuration): Builder[F, In, Out, S] =
       copy(electionTimeoutLow = from, electionTimeoutHigh = until)
 
-    def withAppenderBatchSize(size: Int): Builder[F, A, S] =
+    def withAppenderBatchSize(size: Int): Builder[F, In, Out, S] =
       copy(appenderBatchSize = size)
 
-    def build(using Async[F], Monoid[S]): Resource[F, RaftNode[F, A, S]] =
+    def build(using Async[F], Monoid[S]): Resource[F, RaftNode[F, In, Out, S]] =
       Supervisor[F](await = false).evalMap: supervisor =>
         for
-          inputs: Inputs[F, A, S] <-
+          inputs: Inputs[F, In, Out, S] <-
             Inputs(clientRequestsBuffer, incomingVotedBuffer, incomingAppendsBuffer)
 
           timeout: ElectionTimeout[F] <-
             ElectionTimeout.fromRange[F](electionTimeoutLow, electionTimeoutHigh)
 
-          given Config[F, A, S] =
+          given Config[F, In, Out, S] =
             Config(
               automaton         = automaton,
               log               = log,
@@ -83,11 +81,8 @@ object RaftNode:
           def requestVote(req: RequestVote): F[VoteResponse] =
             inputs.requestVote(req)
 
-          def appendEntries(req: AppendEntries[A]): F[AppendResponse] =
+          def appendEntries(req: AppendEntries[In]): F[AppendResponse] =
             inputs.appendEntries(req)
 
-          def clientWrite(cid: CommandId, entry: A): F[ClientResponse[S]] =
-            inputs.clientRequest(Some(Command(cid, entry)))
-
-          def clientRead: F[ClientResponse[S]] =
-            inputs.clientRequest(None)
+          def clientRequest(cid: CommandId, entry: In): F[ClientResponse[Out, S]] =
+            inputs.clientRequest(Command(cid, entry))

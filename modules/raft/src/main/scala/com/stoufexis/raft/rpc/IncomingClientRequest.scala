@@ -4,7 +4,7 @@ import cats.effect.kernel.DeferredSink
 
 import com.stoufexis.raft.model.Command
 
-case class IncomingClientRequest[F[_], A, S](
-  entry: Option[Command[A]],
-  sink:  DeferredSink[F, ClientResponse[S]]
+case class IncomingClientRequest[F[_], In, Out, S](
+  entry: Command[In],
+  sink:  DeferredSink[F, ClientResponse[Out, S]]
 )

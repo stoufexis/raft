@@ -11,10 +11,10 @@ import com.stoufexis.raft.typeclass.IntLike.*
 
 import scala.collection.immutable.Queue
 
-case class WaitingClient[F[_], S](
+case class WaitingClient[F[_], Out, S](
   startIdx: Index,
   endIdx:   Index,
-  sink:     DeferredSink[F, ClientResponse[S]]
+  sink:     DeferredSink[F, ClientResponse[Out, S]]
 )
 
 object WaitingClient:
@@ -22,36 +22,36 @@ object WaitingClient:
     *
     * TODO: Test
     */
-  extension [F[_], S](clients: Queue[WaitingClient[F, S]])
-    def enqueue(startIdx: Index, endIdx: Index, sink: DeferredSink[F, ClientResponse[S]]) =
+  extension [F[_], Out, S](clients: Queue[WaitingClient[F, Out, S]])
+    def enqueue(startIdx: Index, endIdx: Index, sink: DeferredSink[F, ClientResponse[Out, S]]) =
       clients.enqueue(WaitingClient(startIdx, endIdx, sink))
 
-    def fulfill[A](commitIdx: Index, initS: S, automaton: (S, A) => S)(
+    def fulfill[In](commitIdx: Index, initS: S, automaton: (S, In) => (S, Out))(
       using
-      log: Log[F, A],
+      log: Log[F, In],
       F:   MonadThrow[F],
       C:   Compiler[F, F]
-    ): F[(Queue[WaitingClient[F, S]], S)] =
-      def done(cl: Queue[WaitingClient[F, S]], s: S) =
+    ): F[(Queue[WaitingClient[F, Out, S]], S)] =
+      def done(cl: Queue[WaitingClient[F, Out, S]], s: S) =
         Pull.output1(cl, s) >> Pull.done
 
       def go(
-        stream:  Stream[F, (Index, Command[A])],
+        stream:  Stream[F, (Index, Command[In])],
         acc:     S,
-        head:    WaitingClient[F, S],
-        clients: Queue[WaitingClient[F, S]]
-      ): Pull[F, (Queue[WaitingClient[F, S]], S), Unit] =
+        head:    WaitingClient[F, Out, S],
+        clients: Queue[WaitingClient[F, Out, S]]
+      ): Pull[F, (Queue[WaitingClient[F, Out, S]], S), Unit] =
         stream.pull.uncons1.flatMap:
           case None => done(clients, acc)
 
           case Some(((index, e), tail)) =>
-            val newS: S = automaton(acc, e.value)
+            val (newS, out) = automaton(acc, e.value)
 
             if index >= head.endIdx then
-              val nextClientsAcc: Queue[WaitingClient[F, S]] =
+              val nextClientsAcc: Queue[WaitingClient[F, Out, S]] =
                 clients.dequeue._2
 
-              Pull.eval(head.sink.complete(ClientResponse.Executed(newS))) >>
+              Pull.eval(head.sink.complete(ClientResponse.Executed(newS, out))) >>
                 nextClientsAcc.dequeueOption.match
                   case Some((head, _)) => go(tail, newS, head, nextClientsAcc)
                   case None            => done(clients, newS)

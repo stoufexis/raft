@@ -192,7 +192,7 @@ extension [F[_]](req: RequestVote)(using F: MonadThrow[F], logger: Logger[F])
       _ <- logger.info(s"Voted for ${req.candidateId} in term ${req.term}")
     yield ()
 
-extension [F[_], A, S](reqs: Stream[F, IncomingClientRequest[F, A, S]])
+extension [F[_], A, S](reqs: Stream[F, IncomingClientRequest[F, A, ?, S]])
   def respondWithLeader(leader: Option[NodeId]): Stream[F, Nothing] =
     reqs
       .evalMap(_.sink.complete(ClientResponse.knownLeader(leader)))

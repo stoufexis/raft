@@ -10,7 +10,7 @@ import org.typelevel.log4cats.Logger
 import com.stoufexis.raft.model.*
 
 object StateMachine:
-  def runLoop[F[_], A, S](using F: Async[F], M: Monoid[S], config: Config[F, A, S]): F[Nothing] =
+  def runLoop[F[_], In, Out, S](using F: Async[F], M: Monoid[S], config: Config[F, In, Out, S]): F[Nothing] =
     def persistIfChanged(oldState: NodeInfo, newState: NodeInfo): F[Unit] =
       if oldState.term != newState.term || oldState.votedFor != newState.votedFor then
         config.persisted.persist(newState.term, newState.votedFor)

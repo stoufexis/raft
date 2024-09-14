@@ -6,13 +6,15 @@ import cats.implicits.given
 import fs2.*
 import org.typelevel.log4cats.Logger
 
+import com.stoufexis.raft.model.*
 import com.stoufexis.raft.persist.Log
 import com.stoufexis.raft.rpc.*
 import com.stoufexis.raft.typeclass.IntLike.*
-import com.stoufexis.raft.model.*
 
 object Follower:
-  def apply[F[_]: Temporal: Logger, A, S: Monoid](state: NodeInfo)(using cfg: Config[F, A, S]): Behaviors[F] =
+  def apply[F[_]: Temporal: Logger, In, S: Monoid](state: NodeInfo)(using
+    cfg: Config[F, In, ?, S]
+  ): Behaviors[F] =
     Behaviors(
       cfg.inputs.incomingClientRequests.respondWithLeader(state.knownLeader),
       appendsAndVotes(state)
@@ -21,12 +23,12 @@ object Follower:
   /** Appends and votes are unified since the vote state machine needs to know the current index of the log.
     * Keeping it in the local loop is more efficient that always reading it from the log.
     */
-  def appendsAndVotes[F[_], A, S](state: NodeInfo)(using
+  def appendsAndVotes[F[_], In, S](state: NodeInfo)(using
     F:       Temporal[F],
     logger:  Logger[F],
-    log:     Log[F, A],
+    log:     Log[F, In],
     timeout: ElectionTimeout[F],
-    inputs:  InputSource[F, A, S]
+    inputs:  InputSource[F, In, ?, S]
   ): Stream[F, NodeInfo] =
     /** We can use the state.term, since we will always be writting using this term. If a new term is
       * observed, we transition to a follower of the next term.
