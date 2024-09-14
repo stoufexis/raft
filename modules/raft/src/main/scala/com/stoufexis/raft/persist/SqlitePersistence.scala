@@ -1,33 +1,33 @@
 package com.stoufexis.raft.persist
 
-import cats.effect.SyncIO
-import cats.effect.kernel.*
-import cats.implicits.given
-import doobie.*
-import doobie.implicits.given
-import doobie.util.compat.FactoryCompat
-import doobie.util.fragment.Fragment
-import doobie.util.query.Query0
-import doobie.util.transactor.Transactor
-import fs2.*
-import org.typelevel.log4cats.Logger
+// import cats.effect.SyncIO
+// import cats.effect.kernel.*
+// import cats.implicits.given
+// import doobie.*
+// import doobie.implicits.given
+// import doobie.util.compat.FactoryCompat
+// import doobie.util.fragment.Fragment
+// import doobie.util.query.Query0
+// import doobie.util.transactor.Transactor
+// import fs2.*
+// import org.typelevel.log4cats.Logger
 
-import com.stoufexis.raft.model.*
-import com.stoufexis.raft.typeclass.Storeable
+// import com.stoufexis.raft.model.*
+// import com.stoufexis.raft.typeclass.Storeable
 
-import scala.reflect.ClassTag
+// import scala.reflect.ClassTag
 
-import java.sql.{Connection, DriverManager}
+// import java.sql.{Connection, DriverManager}
 
-object SqlitePersistence:
-  /** Uses a single connection since there is no concurrent use.
-    */
-  def apply[F[_], A: ClassTag](dbPath: String, fetchSize: Int)(using
-    F:         Async[F],
-    logger:    Logger[F],
-    storeable: Storeable[A]
-  ): Resource[F, (Log[F, A], PersistedState[F])] =
-    ???
+// object SqlitePersistence:
+//   /** Uses a single connection since there is no concurrent use.
+//     */
+//   def apply[F[_], A: ClassTag](dbPath: String, fetchSize: Int)(using
+//     F:         Async[F],
+//     logger:    Logger[F],
+//     storeable: Storeable[A]
+//   ): Resource[F, (Log[F, A], PersistedState[F])] =
+//     ???
 
     // given Read[A]  = storeable.read
     // given Write[A] = storeable.write

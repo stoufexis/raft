@@ -9,7 +9,6 @@ import org.typelevel.log4cats.Logger
 import com.stoufexis.raft.*
 import com.stoufexis.raft.ExternalNode
 import com.stoufexis.raft.model.*
-import com.stoufexis.raft.persist.*
 import com.stoufexis.raft.rpc.*
 import com.stoufexis.raft.typeclass.IntLike.*
 

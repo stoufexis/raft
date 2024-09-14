@@ -5,15 +5,15 @@ ThisBuild / organization := "com.stoufexis.raft"
 
 lazy val cats =
   Seq(
-    "co.fs2"        %% "fs2-core"              % "3.10.2",
-    "org.typelevel" %% "cats-core"             % "2.10.0",
-    "org.typelevel" %% "cats-effect"           % "3.5.4"
+    "co.fs2"        %% "fs2-core"    % "3.10.2",
+    "org.typelevel" %% "cats-core"   % "2.10.0",
+    "org.typelevel" %% "cats-effect" % "3.5.4"
   )
 
 lazy val log =
   Seq(
-    "org.typelevel" %% "log4cats-core"  % "2.6.0",
-    "org.typelevel" %% "log4cats-slf4j" % "2.6.0",
+    "org.typelevel" %% "log4cats-core"   % "2.6.0",
+    "org.typelevel" %% "log4cats-slf4j"  % "2.6.0",
     "ch.qos.logback" % "logback-classic" % "1.5.6"
   )
 
@@ -36,44 +36,46 @@ lazy val test =
     "org.scalameta" %% "munit" % "1.0.0" % Test
   )
 
-lazy val proto =
+lazy val commonCompileFlags =
+  Seq(
+    "-Ykind-projector:underscores",
+    "-Wvalue-discard",
+    "-Wunused:implicits",
+    "-Wunused:explicits",
+    "-Wunused:imports",
+    "-Wunused:locals",
+    "-Wunused:params",
+    "-Wunused:privates",
+    "-language:strictEquality",
+    "-source:future"
+  )
+
+lazy val raft =
   project
-    .in(file("modules/proto"))
+    .in(file("modules/raft"))
+    .settings(
+      libraryDependencies ++= cats ++ log ++ test,
+      scalacOptions ++= commonCompileFlags
+    )
+
+lazy val kvproto =
+  project
+    .in(file("modules/kvproto"))
     .enablePlugins(Fs2Grpc)
     .settings(
       libraryDependencies ++= grpc
     )
 
-lazy val impl =
+lazy val kvstore =
   project
-    .in(file("modules/impl"))
-    .dependsOn(raft)
-    .enablePlugins(Fs2Grpc)
-    .settings(
-      libraryDependencies ++= cats ++ log ++ grpc,
-    )
-
-lazy val raft =
-  project
-    .in(file("modules/raft"))
-    .dependsOn(proto)
+    .in(file("modules/kvstore"))
+    .dependsOn(kvproto, raft)
     .settings(
       libraryDependencies ++= cats ++ log ++ grpc ++ persist ++ test,
-      scalacOptions ++= Seq(
-        "-Ykind-projector:underscores",
-        "-Wvalue-discard",
-        "-Wunused:implicits",
-        "-Wunused:explicits",
-        "-Wunused:imports",
-        "-Wunused:locals",
-        "-Wunused:params",
-        "-Wunused:privates",
-        "-language:strictEquality",
-        "-source:future"
-      )
+      scalacOptions ++= commonCompileFlags
     )
 
 lazy val root =
   project
     .in(file("."))
-    .aggregate(proto, raft, impl)
+    .aggregate(raft, kvproto, kvstore)
