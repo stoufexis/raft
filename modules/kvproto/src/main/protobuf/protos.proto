@@ -12,18 +12,53 @@ option (scalapb.options) = {
   scala3_sources: true
 };
 
-// The greeting service definition.
-service Greeter {
-  // Sends a greeting
-  rpc SayHello (HelloRequest) returns (HelloReply) {}
+// KVStore
+service KVStore {
+  rpc apply (Command) returns (TransactionUpdate) {}
 }
 
-// The request message containing the user's name.
-message HelloRequest {
-  string name = 1;
+message Command {
+  oneof sealed_value {
+    Get get = 1;
+    Update update = 2;
+    TransactionUpdate transaction_update = 3;
+  }
 }
 
-// The response message containing the greetings
-message HelloReply {
-  string message = 1;
+message Get {
+  string id = 1;
+  repeated string keys = 2;
+}
+
+message OptionalString {
+  optional string value = 1;
+}
+
+message Update {
+  string id = 1;
+  map<string, OptionalString> sets = 2;
+}
+
+message TransactionUpdate {
+  string id = 1;
+  map<string, uint64> gets = 2;
+  map<string, OptionalString> sets = 3;
+}
+
+message Response {
+  oneof sealed_value {
+    Success success = 1;
+    Values values = 2;
+  }
+}
+
+message Success {}
+
+message Value {
+  string value = 1;
+  uint64 revision = 2;
+}
+
+message Values {
+  map<string, Value> values = 1;
 }
