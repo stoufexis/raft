@@ -17,7 +17,7 @@ trait RaftNode[F[_], In, Out, S]:
 
   def appendEntries(req: AppendEntries[In]): F[AppendResponse]
 
-  def clientRequest(cid: CommandId, entry: In): F[ClientResponse[Out, S]]
+  def clientRequest(cmd: Command[In]): F[ClientResponse[Out, S]]
 
 object RaftNode:
   def builder[F[_], In, Out, S](
@@ -84,5 +84,5 @@ object RaftNode:
           def appendEntries(req: AppendEntries[In]): F[AppendResponse] =
             inputs.appendEntries(req)
 
-          def clientRequest(cid: CommandId, entry: In): F[ClientResponse[Out, S]] =
-            inputs.clientRequest(Command(cid, entry))
+          def clientRequest(cmd: Command[In]): F[ClientResponse[Out, S]] =
+            inputs.clientRequest(cmd)
