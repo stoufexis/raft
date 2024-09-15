@@ -28,7 +28,8 @@ lazy val grpc =
 lazy val persist =
   Seq(
     "org.tpolecat" %% "doobie-core" % "1.0.0-RC5",
-    "org.xerial"    % "sqlite-jdbc" % "3.46.1.0"
+    "org.xerial"    % "sqlite-jdbc" % "3.46.1.0",
+    "org.scodec"   %% "scodec-core" % "2.3.1"
   )
 
 lazy val test =
@@ -54,7 +55,7 @@ lazy val raft =
   project
     .in(file("modules/raft"))
     .settings(
-      libraryDependencies ++= cats ++ log ++ test,
+      libraryDependencies ++= cats ++ log ++ test ++ persist,
       scalacOptions ++= commonCompileFlags
     )
 
@@ -71,7 +72,7 @@ lazy val kvstore =
     .in(file("modules/kvstore"))
     .dependsOn(kvproto, raft)
     .settings(
-      libraryDependencies ++= cats ++ log ++ grpc ++ persist ++ test,
+      libraryDependencies ++= cats ++ log ++ grpc ++ test,
       scalacOptions ++= commonCompileFlags
     )
 

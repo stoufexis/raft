@@ -1,5 +1,7 @@
 package com.stoufexis.raft.model
 
+import doobie.util.*
+
 opaque type NodeId = String
 
 object NodeId:
@@ -9,3 +11,5 @@ object NodeId:
   inline def apply(str: String): NodeId = str
 
   given CanEqual[NodeId, NodeId] = CanEqual.derived
+  given Put[NodeId]              = Put[String]
+  given Get[NodeId]              = Get[String]

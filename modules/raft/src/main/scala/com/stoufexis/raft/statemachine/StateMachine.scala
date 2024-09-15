@@ -45,13 +45,13 @@ object StateMachine:
     end go
 
     for
-      (lastTerm, lastVoted) <-
-        config.persisted.readLatest
+      (term, voted) <-
+        config.persisted.readLatest.map(_.getOrElse(Term.init, None))
 
       initState: NodeInfo =
         NodeInfo(
-          role        = Role.Follower(lastVoted),
-          term        = lastTerm,
+          role        = Role.Follower(voted),
+          term        = term,
           knownLeader = None
         )
 

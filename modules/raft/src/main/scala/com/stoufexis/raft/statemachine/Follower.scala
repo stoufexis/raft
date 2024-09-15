@@ -1,6 +1,7 @@
 package com.stoufexis.raft.statemachine
 
 import cats.*
+import cats.data.NonEmptySeq
 import cats.effect.kernel.*
 import cats.implicits.given
 import fs2.*
@@ -38,7 +39,7 @@ object Follower:
 
     for
       electionTimeout <- Stream.eval(timeout.nextElectionTimeout)
-      (_, initIdx)    <- Stream.eval(log.lastTermIndex)
+      initIdx         <- Stream.eval(log.lastTermIndex.map(_.fold(Index.uninitiated)(_._2)))
 
       out: NodeInfo <-
         (inputs.incomingAppends mergeHaltBoth inputs.incomingVotes).resettableTimeoutAccumulate(
@@ -55,14 +56,25 @@ object Follower:
             * about the leader.
             */
           case (i, IncomingAppend(req, sink)) if state.isCurrentLeader(req.term, req.leaderId) =>
-            val append: F[Index] =
-              log
-                .overwriteIfMatches(req.prevLogTerm, req.prevLogIndex, req.term, req.entries)
-                .flatMap:
-                  case None       => req.inconsistent(sink) as i
-                  case Some(newI) => req.accepted(sink) as newI
+            val matches: F[Boolean] =
+              if req.prevLogIndex <= Index.uninitiated then
+                F.pure(true)
+              else
+                log.matches(req.prevLogTerm, req.prevLogIndex)
 
-            ResettableTimeout.Reset(append)
+            ResettableTimeout.Reset:
+              NonEmptySeq.fromSeq(req.entries) match
+                case None =>
+                  matches.ifM(req.accepted(sink), req.inconsistent(sink)).as(i)
+
+                case Some(entries) =>
+                  val onMatches: F[Index] =
+                    log.deleteAfter(req.prevLogIndex) >> log.append(req.term, entries) <* req.accepted(sink)
+
+                  val onNotMatches: F[Index] =
+                    req.inconsistent(sink) as i
+
+                  matches.ifM(onMatches, onNotMatches)
 
           case (_, IncomingAppend(req, sink)) =>
             ResettableTimeout.outputPure(state.toFollower(req.term, req.leaderId))

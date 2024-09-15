@@ -63,8 +63,11 @@ object Candidate:
     import ResettableTimeout.*
 
     for
-      electionTimeout           <- Stream.eval(config.timeout.nextElectionTimeout)
-      (lastLogTerm, lastLogIdx) <- Stream.eval(config.log.lastTermIndex)
+      electionTimeout <-
+        Stream.eval(config.timeout.nextElectionTimeout)
+
+      (lastLogTerm, lastLogIdx) <-
+        Stream.eval(config.log.lastTermIndex.map(_.getOrElse(Term.uninitiated, Index.uninitiated)))
 
       out: NodeInfo <-
         def req(node: ExternalNode[F, In]): F[(NodeId, VoteResponse)] =

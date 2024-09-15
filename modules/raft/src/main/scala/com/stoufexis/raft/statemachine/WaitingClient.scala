@@ -12,19 +12,18 @@ import com.stoufexis.raft.typeclass.IntLike.*
 import scala.collection.immutable.Queue
 
 case class WaitingClient[F[_], Out, S](
-  startIdx: Index,
-  endIdx:   Index,
-  sink:     DeferredSink[F, ClientResponse[Out, S]]
+  idx:  Index,
+  sink: DeferredSink[F, ClientResponse[Out, S]]
 )
 
 object WaitingClient:
-  /** clients are assumed to be in order - the first to be dequeued has the lowest endIdx
+  /** clients are assumed to be in order - the first to be dequeued has the lowest idx
     *
     * TODO: Test
     */
   extension [F[_], Out, S](clients: Queue[WaitingClient[F, Out, S]])
-    def enqueue(startIdx: Index, endIdx: Index, sink: DeferredSink[F, ClientResponse[Out, S]]) =
-      clients.enqueue(WaitingClient(startIdx, endIdx, sink))
+    def enqueue(idx: Index, sink: DeferredSink[F, ClientResponse[Out, S]]) =
+      clients.enqueue(WaitingClient(idx, sink))
 
     def fulfill[In](commitIdx: Index, initS: S, automaton: (S, In) => (S, Out))(
       using
@@ -47,7 +46,7 @@ object WaitingClient:
           case Some(((index, e), tail)) =>
             val (newS, out) = automaton(acc, e.value)
 
-            if index >= head.endIdx then
+            if index >= head.idx then
               val nextClientsAcc: Queue[WaitingClient[F, Out, S]] =
                 clients.dequeue._2
 
@@ -63,7 +62,7 @@ object WaitingClient:
           F.pure(clients, initS)
 
         case Some((head, _)) =>
-          go(log.rangeStream(head.startIdx, commitIdx), initS, head, clients)
+          go(log.rangeStream(head.idx, commitIdx), initS, head, clients)
             .stream
             .compile
             .lastOrError

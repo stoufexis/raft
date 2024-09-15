@@ -24,6 +24,13 @@ case class State(map: Map[String, (String, Long)]):
       acc.updatedWith(key)(_ => map.get(key))
 
 object StateMachine:
+  import scodec.*
+  import scodec.bits.*
+  import scodec.codecs.*
+
+  // Create a codec for an 8-bit unsigned int followed by an 8-bit unsigned int followed by a 16-bit unsigned int
+  val firstCodec: Codec[(Int, Int, Int)] = uint8 :: uint8 :: uint16
+
   def apply(state: State, cmd: KvCommand): (State, KvResponse) =
     cmd match
       case KvCommand.Get(keys) =>

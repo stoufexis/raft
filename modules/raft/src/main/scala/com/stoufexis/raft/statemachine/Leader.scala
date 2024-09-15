@@ -1,6 +1,7 @@
 package com.stoufexis.raft.statemachine
 
 import cats.*
+import cats.data.NonEmptySeq
 import cats.effect.kernel.*
 import cats.implicits.given
 import fs2.*
@@ -115,15 +116,14 @@ object Leader:
     config: Config[F, In, Out, S]
   ): Stream[F, Nothing] =
     for
-      initIdx <- Stream.eval(config.log.lastTermIndex.map(_._2))
+      initIdx <- Stream.eval(config.log.lastTermIndex.map(_.fold(Index.uninitiated)(_._2)))
       _       <- Stream.eval(newIdxs.publish(initIdx))
 
-      (_, initS) <-
-        config
-          .log
-          .rangeStream(Index.init, initIdx)
-          .fold((Index.init, Monoid[S].empty)):
-            case ((_, s), (index, e)) => (index, config.automaton(s, e.value)._1)
+      initS <-
+        config.log
+          .rangeStream(Index.uninitiated, initIdx)
+          .fold(Monoid[S].empty):
+            case (s, (_, c)) => config.automaton(s, c.value)._1
 
       // Assumes that matchIdxs for each node always increase
       commitIdx: Stream[F, Index] =
@@ -139,23 +139,27 @@ object Leader:
         commitIdx.mergeEither(config.inputs.incomingClientRequests)
 
       // Waiting clients in the vector are assumed to have non-overlapping and continuous indexes
-      acc: (Queue[WaitingClient[F, Out, S]], Index, S) =
-        (Queue.empty, initIdx, initS)
+      acc: (Queue[WaitingClient[F, Out, S]], S) =
+        (Queue.empty, initS)
 
       out: Nothing <-
         commitsAndAppends.evalScanDrain(acc):
-          case ((clients, idxEnd, s), Left(commitIdx)) =>
-            clients
-              .fulfill(commitIdx, s, config.automaton)
-              .map((_, idxEnd, _))
+          case ((clients, s), Left(commitIdx)) =>
+            clients.fulfill(commitIdx, s, config.automaton)
 
-          case (acc @ (clients, idxEnd, s), Right(req)) =>
-            config.log.append(state.term, idxEnd, req.entry).flatMap:
-              case None =>
-                req.sink.complete(ClientResponse.Skipped(s)) as acc
+          case (acc @ (clients, s), Right(req)) =>
+            val ifNotExists: F[(Queue[WaitingClient[F, Out, S]], S)] =
+              config.log
+                .append(state.term, NonEmptySeq.of(req.entry))
+                .flatTap(newIdxs.publish(_))
+                .map(i => (clients.enqueue(i, req.sink), s))
 
-              case Some(newIdx) =>
-                newIdxs.publish(newIdx) as (clients.enqueue(idxEnd + 1, newIdx, req.sink), newIdx, s)
+            val ifExists: F[(Queue[WaitingClient[F, Out, S]], S)] =
+              req.sink.complete(ClientResponse.Skipped(s)) as acc
+
+            config.log
+              .commandIdExists(req.entry.id)
+              .ifM(ifExists, ifNotExists)
     yield out
 
   /** If the majority of the cluster is not reached with any request for an electionTimeout, demote self to
@@ -242,8 +246,14 @@ object Leader:
         val startIdx: Index = matchIdx + 1
         val endIdx:   Index = startIdx + config.appenderBatchSize
 
+        val term: F[Term] =
+          if matchIdx <= Index.uninitiated then
+            F.pure(Term.uninitiated)
+          else
+            config.log.term(matchIdx)
+
         val info: F[(Term, Seq[Command[In]])] =
-          config.log.term(matchIdx).product:
+          term.product:
             if seek
             then F.pure(Seq.empty)
             else config.log.range(startIdx, endIdx)
