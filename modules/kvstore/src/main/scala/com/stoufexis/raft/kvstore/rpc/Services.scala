@@ -12,7 +12,7 @@ import com.stoufexis.raft.model.*
 import com.stoufexis.raft.rpc.*
 
 object Services:
-  case object EmptyValueReceived extends RuntimeException("Received empty value")
+  // Mappers hell
 
   def protoCmdMap[F[_]](protoCmd: proto.public.Command)(using F: MonadThrow[F]): F[Command[KvCommand]] =
     import proto.public.CommandMessage.SealedValue

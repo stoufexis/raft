@@ -33,16 +33,16 @@ object RaftNode:
     automaton:             (S, In) => (S, Out),
     log:                   Log[F, In],
     persisted:             PersistedState[F],
-    otherNodes:            List[ExternalNode[F, In, S]] = Nil,
-    heartbeatEvery:        FiniteDuration               = 100.millis,
-    electionTimeoutLow:    FiniteDuration               = 500.millis,
-    electionTimeoutHigh:   FiniteDuration               = 1.second,
-    appenderBatchSize:     Int                          = 10,
-    clientRequestsBuffer:  Int                          = 10,
-    incomingVotedBuffer:   Int                          = 1,
-    incomingAppendsBuffer: Int                          = 1
+    otherNodes:            List[ExternalNode[F, In]] = Nil,
+    heartbeatEvery:        FiniteDuration            = 100.millis,
+    electionTimeoutLow:    FiniteDuration            = 500.millis,
+    electionTimeoutHigh:   FiniteDuration            = 1.second,
+    appenderBatchSize:     Int                       = 10,
+    clientRequestsBuffer:  Int                       = 10,
+    incomingVotedBuffer:   Int                       = 1,
+    incomingAppendsBuffer: Int                       = 1
   ):
-    def withExternals(nodes: ExternalNode[F, In, S]*): Builder[F, In, Out, S] =
+    def withExternals(nodes: ExternalNode[F, In]*): Builder[F, In, Out, S] =
       copy(otherNodes = otherNodes ++ nodes)
 
     def withHeartbeatEvery(heartbeatEvery: FiniteDuration): Builder[F, In, Out, S] =

@@ -67,7 +67,7 @@ object Candidate:
       (lastLogTerm, lastLogIdx) <- Stream.eval(config.log.lastTermIndex)
 
       out: NodeInfo <-
-        def req(node: ExternalNode[F, In, S]): F[(NodeId, VoteResponse)] =
+        def req(node: ExternalNode[F, In]): F[(NodeId, VoteResponse)] =
           node
             .requestVote(RequestVote(config.cluster.currentNode, state.term, lastLogIdx, lastLogTerm))
             .tupleLeft(node.id)

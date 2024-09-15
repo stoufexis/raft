@@ -220,7 +220,7 @@ object Leader:
     */
   def appender[F[_], In, Out, S](
     state:     NodeInfo,
-    node:      ExternalNode[F, In, S],
+    node:      ExternalNode[F, In],
     newIdxs:   CloseableTopic[F, Index],
     matchIdxs: CloseableTopic[F, (NodeId, Index)],
     config:    Config[F, In, Out, S]
