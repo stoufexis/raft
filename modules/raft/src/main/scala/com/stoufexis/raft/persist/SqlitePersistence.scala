@@ -3,14 +3,10 @@ package com.stoufexis.raft.persist
 import cats.MonadThrow
 import cats.data.NonEmptySeq
 import cats.effect.kernel.*
-import cats.free.Free
 import cats.implicits.given
 import doobie.*
-import doobie.free.connection.ConnectionOp
 import doobie.implicits.given
-import doobie.util.compat.FactoryCompat
 import doobie.util.fragment.Fragment
-import doobie.util.query.Query0
 import doobie.util.transactor.Transactor
 import fs2.*
 import org.typelevel.log4cats.Logger
@@ -20,7 +16,6 @@ import scodec.bits.BitVector
 
 import com.stoufexis.raft.model.*
 import com.stoufexis.raft.persist.*
-import com.stoufexis.raft.typeclass.IntLike.*
 
 import java.sql.{Connection, DriverManager}
 
@@ -79,7 +74,7 @@ object SqlitePersistence:
       _ <- Resource.eval:
         logger.info(s"Setting up log table: ${createLogTable.internals.sql}")
           >> createLogTable.update.run.transact(xa)
-          >> logger.info(s"Setting up log table: ${createPersistTable.internals.sql}")
+          >> logger.info(s"Setting up persist table: ${createPersistTable.internals.sql}")
           >> createPersistTable.update.run.transact(xa)
 
       persistentState: PersistedState[F] = new:

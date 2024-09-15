@@ -1,6 +1,8 @@
 package com.stoufexis.raft.kvstore.statemachine
 
-enum KvCommand derives CanEqual:
+import scodec.Codec
+
+enum KvCommand derives CanEqual, Codec:
   case Get(keys: Set[String])
   case Update(sets: Map[String, Option[String]])
   case TransactionUpdate(gets: Map[String, Long], sets: Map[String, Option[String]])
@@ -24,13 +26,6 @@ case class State(map: Map[String, (String, Long)]):
       acc.updatedWith(key)(_ => map.get(key))
 
 object StateMachine:
-  import scodec.*
-  import scodec.bits.*
-  import scodec.codecs.*
-
-  // Create a codec for an 8-bit unsigned int followed by an 8-bit unsigned int followed by a 16-bit unsigned int
-  val firstCodec: Codec[(Int, Int, Int)] = uint8 :: uint8 :: uint16
-
   def apply(state: State, cmd: KvCommand): (State, KvResponse) =
     cmd match
       case KvCommand.Get(keys) =>
