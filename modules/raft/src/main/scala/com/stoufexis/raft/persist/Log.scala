@@ -15,16 +15,16 @@ trait Log[F[_], In]:
     entry:   Command[In]
   ): F[Option[Index]]
 
-  def overwriteChunkIfMatches(
+  def overwriteIfMatches(
     prevLogTerm:  Term,
     prevLogIndex: Index,
     term:         Term,
-    entries:      Chunk[Command[In]]
+    entries:      Seq[Command[In]]
   ): F[Option[Index]]
 
   /** Inclusive range
     */
-  def range(from: Index, until: Index): F[Chunk[Command[In]]]
+  def range(from: Index, until: Index): F[Seq[Command[In]]]
 
   def rangeStream(from: Index, until: Index): Stream[F, (Index, Command[In])]
 

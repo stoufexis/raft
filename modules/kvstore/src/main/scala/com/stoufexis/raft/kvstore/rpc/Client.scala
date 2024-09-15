@@ -40,7 +40,7 @@ object Client:
               term         = req.term.long,
               prevLogIndex = req.prevLogIndex.long,
               prevLogTerm  = req.prevLogTerm.long,
-              entries      = req.entries.map(protoCmdMap).toList
+              entries      = req.entries.map(protoCmdMap)
             ),
             Metadata()
           )

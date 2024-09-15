@@ -1,7 +1,5 @@
 package com.stoufexis.raft.rpc
 
-import fs2.Chunk
-
 import com.stoufexis.raft.model.*
 
 case class AppendEntries[In](
@@ -9,5 +7,5 @@ case class AppendEntries[In](
   term:         Term,
   prevLogIndex: Index,
   prevLogTerm:  Term,
-  entries:      Chunk[Command[In]]
+  entries:      Seq[Command[In]]
 )

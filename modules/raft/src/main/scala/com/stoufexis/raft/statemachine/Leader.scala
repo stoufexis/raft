@@ -242,10 +242,10 @@ object Leader:
         val startIdx: Index = matchIdx + 1
         val endIdx:   Index = startIdx + config.appenderBatchSize
 
-        val info: F[(Term, Chunk[Command[In]])] =
+        val info: F[(Term, Seq[Command[In]])] =
           config.log.term(matchIdx).product:
             if seek
-            then F.pure(Chunk.empty)
+            then F.pure(Seq.empty)
             else config.log.range(startIdx, endIdx)
 
         info.flatMap: (matchIdxTerm, entries) =>

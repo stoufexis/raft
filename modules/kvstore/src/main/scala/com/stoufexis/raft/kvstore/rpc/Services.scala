@@ -2,7 +2,6 @@ package com.stoufexis.raft.kvstore.rpc
 
 import cats.*
 import cats.implicits.given
-import fs2.*
 import io.grpc.Metadata
 
 import com.stoufexis.raft.RaftNode
@@ -71,8 +70,8 @@ object Services:
         request: proto.internal.raft.AppendEntries,
         ctx:     Metadata
       ): F[proto.internal.raft.AppendResponse] =
-        val cmds: F[Chunk[Command[KvCommand]]] =
-          Chunk.from(request.entries).traverse(protoCmdMap)
+        val cmds: F[Seq[Command[KvCommand]]] =
+          request.entries.traverse(protoCmdMap)
 
         val req: F[AppendEntries[KvCommand]] = cmds.map: entries =>
           AppendEntries(
