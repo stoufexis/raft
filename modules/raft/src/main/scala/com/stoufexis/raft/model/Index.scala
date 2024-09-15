@@ -1,6 +1,6 @@
 package com.stoufexis.raft.model
 
-import doobie.util.*
+import cats.*
 
 import com.stoufexis.raft.typeclass.IntLike
 
@@ -15,7 +15,11 @@ object Index:
   extension (i: Index)
     infix def long: Long = i
 
+  inline def deriveFunctor[F[_]](using F: Functor[F], base: F[Long]): F[Index] =
+    F.map(base)(identity)
+
+  inline def deriveContravariant[F[_]](using F: Contravariant[F], base: F[Long]): F[Index] =
+    F.contramap(base)(identity)
+
   given IntLike[Index]         = IntLike.IntLikeLong
   given CanEqual[Index, Index] = CanEqual.derived
-  given Put[Index]             = Put[Long]
-  given Get[Index]             = Get[Long]

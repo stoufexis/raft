@@ -1,6 +1,6 @@
 package com.stoufexis.raft.model
 
-import doobie.util.*
+import cats.*
 
 opaque type CommandId = String
 
@@ -10,5 +10,8 @@ object CommandId:
 
   infix def apply(str: String): CommandId = str
 
-  given Put[CommandId] = Put[String]
-  given Get[CommandId] = Get[String]
+  inline def deriveFunctor[F[_]](using F: Functor[F], base: F[String]): F[CommandId] =
+    F.map(base)(identity)
+
+  inline def deriveContravariant[F[_]](using F: Contravariant[F],base: F[String]): F[CommandId] =
+    F.contramap(base)(identity)

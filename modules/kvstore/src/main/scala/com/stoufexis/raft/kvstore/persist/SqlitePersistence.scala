@@ -1,4 +1,4 @@
-package com.stoufexis.raft.persist
+package com.stoufexis.raft.kvstore.persist
 
 import cats.MonadThrow
 import cats.data.NonEmptySeq
@@ -6,6 +6,7 @@ import cats.effect.kernel.*
 import cats.implicits.given
 import doobie.*
 import doobie.implicits.given
+import doobie.util.*
 import doobie.util.fragment.Fragment
 import doobie.util.transactor.Transactor
 import fs2.*
@@ -26,6 +27,15 @@ object SqlitePersistence:
     F:      Async[F],
     logger: Logger[F]
   ): Resource[F, (Log[F, A], PersistedState[F])] =
+
+    given Put[Index]     = Index.deriveContravariant
+    given Get[Index]     = Index.deriveFunctor
+    given Put[Term]      = Term.deriveContravariant
+    given Get[Term]      = Term.deriveFunctor
+    given Put[CommandId] = CommandId.deriveContravariant
+    given Get[CommandId] = CommandId.deriveFunctor
+    given Put[NodeId]    = NodeId.deriveContravariant
+    given Get[NodeId]    = NodeId.deriveFunctor
 
     case object EncodingFailure extends RuntimeException("Encoding failure")
 
@@ -153,5 +163,4 @@ object SqlitePersistence:
             .toList
             .widen
             .transact(xa)
-
     yield (log, persistentState)

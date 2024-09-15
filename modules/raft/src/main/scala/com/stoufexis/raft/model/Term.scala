@@ -1,6 +1,6 @@
 package com.stoufexis.raft.model
 
-import doobie.util.*
+import cats.*
 
 import com.stoufexis.raft.typeclass.IntLike
 
@@ -15,7 +15,11 @@ object Term:
 
   infix def apply(l: Long): Term = l
 
+  inline def deriveFunctor[F[_]](using F: Functor[F], base: F[Long]): F[Term] =
+    F.map(base)(identity)
+
+  inline def deriveContravariant[F[_]](using F: Contravariant[F], base: F[Long]): F[Term] =
+    F.contramap(base)(identity)
+
   given IntLike[Term]        = IntLike.IntLikeLong
   given CanEqual[Term, Term] = CanEqual.derived
-  given Put[Term]            = Put[Long]
-  given Get[Term]            = Get[Long]

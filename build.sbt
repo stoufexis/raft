@@ -55,7 +55,7 @@ lazy val raft =
   project
     .in(file("modules/raft"))
     .settings(
-      libraryDependencies ++= cats ++ log ++ test ++ persist,
+      libraryDependencies ++= cats ++ log ++ test,
       scalacOptions ++= commonCompileFlags
     )
 
@@ -72,7 +72,7 @@ lazy val kvstore =
     .in(file("modules/kvstore"))
     .dependsOn(kvproto, raft)
     .settings(
-      libraryDependencies ++= cats ++ log ++ grpc ++ test,
+      libraryDependencies ++= cats ++ log ++ grpc ++ test ++ persist,
       scalacOptions ++= commonCompileFlags
     )
 
