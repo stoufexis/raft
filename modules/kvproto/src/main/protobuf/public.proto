@@ -12,9 +12,8 @@ option (scalapb.options) = {
   scala3_sources: true
 };
 
-// KVStore
 service KVStore {
-  rpc apply (Command) returns (TransactionUpdate) {}
+  rpc apply (Command) returns (Response) {}
 }
 
 message Command {
@@ -49,6 +48,9 @@ message Response {
   oneof sealed_value {
     Success success = 1;
     Values values = 2;
+    Skipped skipped = 3;
+    Redirect redirect = 4;
+    UnknownLeader unknown_leader = 5;
   }
 }
 
@@ -62,3 +64,11 @@ message Value {
 message Values {
   map<string, Value> values = 1;
 }
+
+message Skipped {}
+
+message Redirect {
+  string leaderId = 1;
+}
+
+message UnknownLeader {}

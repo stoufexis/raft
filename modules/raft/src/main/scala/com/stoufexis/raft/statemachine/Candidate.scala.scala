@@ -7,11 +7,13 @@ import fs2.*
 import org.typelevel.log4cats.Logger
 
 import com.stoufexis.raft.*
-import com.stoufexis.raft.rpc.*
 import com.stoufexis.raft.model.*
+import com.stoufexis.raft.rpc.*
 
 object Candidate:
-  def apply[F[_]: Logger: Temporal, In, S: Monoid](state: NodeInfo)(using cfg: Config[F, In, ?, S]): Behaviors[F] =
+  def apply[F[_]: Logger: Temporal, In, S: Monoid](state: NodeInfo)(using
+    cfg: Config[F, In, ?, S]
+  ): Behaviors[F] =
     Behaviors(
       appends(state),
       inVotes(state),
