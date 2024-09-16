@@ -1,17 +1,20 @@
 package com.stoufexis.raft.kvstore
 
 import cats.*
-import doobie.util.*
+import cats.data.*
+import doobie.util.{Get, Put}
+import io.circe
+import io.circe.Json
+import io.circe.syntax.given
+import org.http4s.{ParseFailure, QueryParamDecoder, QueryParameterValue}
 import scodec.*
 import scodec.Codec.{given_Codec_Long, given_Codec_String}
 import scodec.bits.BitVector
 
-import com.stoufexis.raft.kvstore.statemachine.KvCommand
+import com.stoufexis.raft.kvstore.statemachine.*
+import com.stoufexis.raft.kvstore.rpc.*
 import com.stoufexis.raft.model.*
-import com.stoufexis.raft.rpc.AppendEntries
-import com.stoufexis.raft.rpc.AppendResponse
-import com.stoufexis.raft.rpc.RequestVote
-import com.stoufexis.raft.rpc.VoteResponse
+import com.stoufexis.raft.rpc.*
 
 object implicits:
   given Contravariant[Encoder] with
@@ -80,3 +83,22 @@ object implicits:
   given Codec[AppendResponse] = Codec.derived
   given Codec[RequestVote]    = Codec.derived
   given Codec[VoteResponse]   = Codec.derived
+
+  given QueryParamDecoder[CommandId] with
+    def decode(value: QueryParameterValue): ValidatedNel[ParseFailure, CommandId] =
+      Validated.Valid(CommandId(value.value))
+
+  given QueryParamDecoder[RevisionId] with
+    def decode(value: QueryParameterValue): ValidatedNel[ParseFailure, RevisionId] =
+      val v = value.value
+      BitVector.fromBase64(v) match
+        case Some(bv) =>
+          Codec[RevisionId].decodeValue(bv) match
+            case Attempt.Successful(rid) =>
+              Validated.Valid(rid)
+
+            case Attempt.Failure(cause) =>
+              Validated.Invalid(NonEmptyList.of(ParseFailure("Decode failure", v)))
+
+        case None =>
+          Validated.Invalid(NonEmptyList.of(ParseFailure("Not a valid base64 string", v)))

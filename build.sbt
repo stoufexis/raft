@@ -17,21 +17,29 @@ lazy val log =
     "ch.qos.logback" % "logback-classic" % "1.5.6"
   )
 
-lazy val http4s =
+lazy val rpc =
   Seq(
     "org.http4s" %% "http4s-ember-client" % "0.23.28",
     "org.http4s" %% "http4s-ember-server" % "0.23.28",
     "org.http4s" %% "http4s-dsl"          % "0.23.28",
     "org.http4s" %% "http4s-core"         % "0.23.28",
+    "org.http4s" %% "http4s-circe"        % "0.23.28",
     "org.http4s" %% "http4s-netty-server" % "0.5.19",
-    "org.http4s" %% "http4s-netty-client" % "0.5.19"
+    "org.http4s" %% "http4s-netty-client" % "0.5.19",
+    "io.circe"   %% "circe-core"          % "0.14.1",
+    "io.circe"   %% "circe-generic"       % "0.14.1",
+    "io.circe"   %% "circe-parser"        % "0.14.1"
   )
 
 lazy val persist =
   Seq(
     "org.tpolecat" %% "doobie-core" % "1.0.0-RC5",
-    "org.xerial"    % "sqlite-jdbc" % "3.46.1.0",
-    "org.scodec"   %% "scodec-core" % "2.3.1"
+    "org.xerial"    % "sqlite-jdbc" % "3.46.1.0"
+  )
+
+lazy val binary =
+  Seq(
+    "org.scodec" %% "scodec-core" % "2.3.1"
   )
 
 lazy val test =
@@ -65,7 +73,7 @@ lazy val kvstore =
     .in(file("modules/kvstore"))
     .dependsOn(raft)
     .settings(
-      libraryDependencies ++= cats ++ log ++ http4s ++ test ++ persist,
+      libraryDependencies ++= cats ++ log ++ rpc ++ binary ++ test ++ persist,
       scalacOptions ++= commonCompileFlags
     )
 
