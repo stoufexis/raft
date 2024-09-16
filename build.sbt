@@ -17,12 +17,14 @@ lazy val log =
     "ch.qos.logback" % "logback-classic" % "1.5.6"
   )
 
-lazy val grpc =
+lazy val http4s =
   Seq(
-    "io.grpc"               % "grpc-netty-shaded" % scalapb.compiler.Version.grpcJavaVersion,
-    "com.thesamet.scalapb" %% "scalapb-runtime"   % scalapb.compiler.Version.scalapbVersion % "protobuf",
-    "org.typelevel"        %% "fs2-grpc-codegen"  % "2.7.16",
-    "org.typelevel"        %% "fs2-grpc-runtime"  % "2.7.16"
+    "org.http4s" %% "http4s-ember-client" % "0.23.28",
+    "org.http4s" %% "http4s-ember-server" % "0.23.28",
+    "org.http4s" %% "http4s-dsl"          % "0.23.28",
+    "org.http4s" %% "http4s-core"         % "0.23.28",
+    "org.http4s" %% "http4s-netty-server" % "0.5.19",
+    "org.http4s" %% "http4s-netty-client" % "0.5.19"
   )
 
 lazy val persist =
@@ -47,7 +49,6 @@ lazy val commonCompileFlags =
     "-Wunused:locals",
     "-Wunused:params",
     "-Wunused:privates",
-    "-language:strictEquality",
     "-source:future"
   )
 
@@ -59,24 +60,16 @@ lazy val raft =
       scalacOptions ++= commonCompileFlags
     )
 
-lazy val kvproto =
-  project
-    .in(file("modules/kvproto"))
-    .enablePlugins(Fs2Grpc)
-    .settings(
-      libraryDependencies ++= grpc
-    )
-
 lazy val kvstore =
   project
     .in(file("modules/kvstore"))
-    .dependsOn(kvproto, raft)
+    .dependsOn(raft)
     .settings(
-      libraryDependencies ++= cats ++ log ++ grpc ++ test ++ persist,
+      libraryDependencies ++= cats ++ log ++ http4s ++ test ++ persist,
       scalacOptions ++= commonCompileFlags
     )
 
 lazy val root =
   project
     .in(file("."))
-    .aggregate(raft, kvproto, kvstore)
+    .aggregate(raft, kvstore)

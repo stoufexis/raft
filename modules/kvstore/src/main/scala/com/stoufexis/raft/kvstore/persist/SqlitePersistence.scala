@@ -17,6 +17,7 @@ import scodec.bits.BitVector
 
 import com.stoufexis.raft.model.*
 import com.stoufexis.raft.persist.*
+import com.stoufexis.raft.kvstore.implicits.given
 
 import java.sql.{Connection, DriverManager}
 
@@ -27,15 +28,6 @@ object SqlitePersistence:
     F:      Async[F],
     logger: Logger[F]
   ): Resource[F, (Log[F, A], PersistedState[F])] =
-
-    given Put[Index]     = Index.deriveContravariant
-    given Get[Index]     = Index.deriveFunctor
-    given Put[Term]      = Term.deriveContravariant
-    given Get[Term]      = Term.deriveFunctor
-    given Put[CommandId] = CommandId.deriveContravariant
-    given Get[CommandId] = CommandId.deriveFunctor
-    given Put[NodeId]    = NodeId.deriveContravariant
-    given Get[NodeId]    = NodeId.deriveFunctor
 
     case object EncodingFailure extends RuntimeException("Encoding failure")
 
