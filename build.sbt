@@ -68,11 +68,16 @@ lazy val raft =
 
 lazy val kvstore =
   project
+    .enablePlugins(DockerPlugin, JavaAppPackaging)
     .in(file("modules/kvstore"))
     .dependsOn(raft)
     .settings(
       libraryDependencies ++= cats ++ log ++ rpc ++ binary ++ test ++ persist,
-      scalacOptions ++= commonCompileFlags
+      scalacOptions ++= commonCompileFlags,
+      // docker
+      dockerExposedPorts ++= Seq(8080),
+      dockerBaseImage := "openjdk:11",
+      dockerExposedVolumes := Seq("/opt/var/keystore")
     )
 
 lazy val root =
