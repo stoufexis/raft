@@ -4,7 +4,6 @@ import cats.*
 import cats.effect.kernel.*
 import cats.implicits.given
 import fs2.*
-import fs2.concurrent.Channel
 import org.typelevel.log4cats.Logger
 
 import com.stoufexis.raft.model.*
@@ -18,7 +17,7 @@ object StateMachine:
       else
         F.unit
 
-    def go(st: NodeInfo, chan: Channel[F, NodeInfo]): Stream[F, Nothing] =
+    def go(st: NodeInfo): F[Nothing] =
       val behaviors: Resource[F, Behaviors[F]] =
         for
           given Logger[F] <-
@@ -32,17 +31,7 @@ object StateMachine:
             case Role.Leader      => Leader(st)
         yield behaviors
 
-      // Works like parJoinUnbounded, but reuses the same channel and only ever outputs 1 element
-      val joined: Stream[F, NodeInfo] =
-        for
-          fib: Fiber[F, Throwable, Unit] <-
-            Stream.supervise(behaviors.use(_.parPublish(chan)))
-
-          newState: NodeInfo <-
-            chan.stream.head.evalTap(fib.cancel >> persistIfChanged(st, _))
-        yield newState
-
-      joined >>= (go(_, chan))
+      behaviors.use(_.raceFirst).flatTap(persistIfChanged(st, _)) >>= go
     end go
 
     for
@@ -56,9 +45,5 @@ object StateMachine:
           knownLeader = None
         )
 
-      chan: Channel[F, NodeInfo] <-
-        Channel.synchronous
-
-      n: Nothing <-
-        go(initState, chan).compile[F, F, Nothing].lastOrError
+      n: Nothing <- go(initState)
     yield n
