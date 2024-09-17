@@ -26,7 +26,7 @@ class Routes[F[_]: Concurrent](raft: RaftNode[F, KvCommand, KvResponse, KvState]
         res <- Ok()
       yield res.withEntity(ar)
 
-    case req @ PUT -> Root / "raft" / "vote_request" =>
+    case req @ PUT -> Root / "raft" / "request_vote" =>
       for
         rv  <- req.as[RequestVote]
         vr  <- raft.requestVote(rv)
