@@ -4,18 +4,11 @@ import cats.*
 import cats.data.*
 import cats.effect.*
 import doobie.util.{Get, Put}
-import fs2.Chunk
-import org.http4s.EntityDecoder
-import org.http4s.EntityEncoder
-import org.http4s.{ParseFailure, QueryParamDecoder, QueryParameterValue}
-import scodec.*
-import scodec.Attempt.Failure
-import scodec.Attempt.Successful
-import scodec.Codec.{given_Codec_Long, given_Codec_String}
+import io.circe.*
+import org.http4s.{ParseFailure, QueryParamDecoder, QueryParameterValue, EntityDecoder, EntityEncoder}
+import org.http4s.circe.*
 import scodec.bits.BitVector
 
-import com.stoufexis.raft.kvstore.*
-import com.stoufexis.raft.kvstore.statemachine.*
 import com.stoufexis.raft.model.*
 import com.stoufexis.raft.rpc.*
 
@@ -28,54 +21,54 @@ object implicits:
 
   given Put[Index]   = Index.deriveContravariant
   given Get[Index]   = Index.deriveFunctor
-  given Codec[Index] = Codec(Index.deriveContravariant, Index.deriveFunctor)
+  given Codec[Index] = Codec.from(Index.deriveFunctor, Index.deriveContravariant)
 
   given Put[Term]   = Term.deriveContravariant
   given Get[Term]   = Term.deriveFunctor
-  given Codec[Term] = Codec(Term.deriveContravariant, Term.deriveFunctor)
+  given Codec[Term] = Codec.from(Term.deriveFunctor, Term.deriveContravariant)
 
   given Put[CommandId]   = CommandId.deriveContravariant
   given Get[CommandId]   = CommandId.deriveFunctor
-  given Codec[CommandId] = Codec(CommandId.deriveContravariant, CommandId.deriveFunctor)
+  given Codec[CommandId] = Codec.from(CommandId.deriveFunctor, CommandId.deriveContravariant)
 
   given Put[NodeId]   = NodeId.deriveContravariant
   given Get[NodeId]   = NodeId.deriveFunctor
-  given Codec[NodeId] = Codec(NodeId.deriveContravariant, NodeId.deriveFunctor)
+  given Codec[NodeId] = Codec.from(NodeId.deriveFunctor, NodeId.deriveContravariant)
 
   given [A: Codec]: Codec[Command[A]] = Codec.derived
 
-  given [K: Codec, V: Codec]: Codec[Map[K, V]] with
-    val codec: Codec[(K, V)] = summon
+  given [K: scodec.Codec, V: scodec.Codec]: scodec.Codec[Map[K, V]] with
+    val codec: scodec.Codec[(K, V)] = summon
 
-    def encode(value: Map[K, V]): Attempt[BitVector] =
+    def encode(value: Map[K, V]): scodec.Attempt[BitVector] =
       codec.encodeAll(value)
 
-    def decode(bits: BitVector): Attempt[DecodeResult[Map[K, V]]] =
+    def decode(bits: BitVector): scodec.Attempt[scodec.DecodeResult[Map[K, V]]] =
       codec.collect(bits, None).map(_.map(_.toMap))
 
-    def sizeBound: SizeBound = SizeBound.unknown
+    def sizeBound: scodec.SizeBound = scodec.SizeBound.unknown
 
     override def toString = s"set($codec)"
 
-  given [A](using codec: Codec[A]): Codec[Set[A]] with
-    def encode(value: Set[A]): Attempt[BitVector] =
+  given [A](using codec: scodec.Codec[A]): scodec.Codec[Set[A]] with
+    def encode(value: Set[A]): scodec.Attempt[BitVector] =
       codec.encodeAll(value)
 
-    def decode(bits: BitVector): Attempt[DecodeResult[Set[A]]] =
+    def decode(bits: BitVector): scodec.Attempt[scodec.DecodeResult[Set[A]]] =
       codec.collect(bits, None)
 
-    def sizeBound: SizeBound = SizeBound.unknown
+    def sizeBound: scodec.SizeBound = scodec.SizeBound.unknown
 
     override def toString = s"set($codec)"
 
-  given [A](using codec: Codec[A]): Codec[Seq[A]] with
-    def encode(value: Seq[A]): Attempt[BitVector] =
+  given [A](using codec: scodec.Codec[A]): scodec.Codec[Seq[A]] with
+    def encode(value: Seq[A]): scodec.Attempt[BitVector] =
       codec.encodeAll(value)
 
-    def decode(bits: BitVector): Attempt[DecodeResult[Seq[A]]] =
+    def decode(bits: BitVector): scodec.Attempt[scodec.DecodeResult[Seq[A]]] =
       codec.collect(bits, None)
 
-    def sizeBound: SizeBound = SizeBound.unknown
+    def sizeBound: scodec.SizeBound = scodec.SizeBound.unknown
 
     override def toString = s"set($codec)"
 
@@ -83,33 +76,10 @@ object implicits:
     def decode(value: QueryParameterValue): ValidatedNel[ParseFailure, CommandId] =
       Validated.Valid(CommandId(value.value))
 
-  given QueryParamDecoder[RevisionId] with
-    def decode(value: QueryParameterValue): ValidatedNel[ParseFailure, RevisionId] =
-      val v = value.value
-      BitVector.fromBase64(v) match
-        case Some(bv) =>
-          Codec[RevisionId].decodeValue(bv) match
-            case Attempt.Successful(rid) =>
-              Validated.Valid(rid)
-
-            case Attempt.Failure(cause) =>
-              Validated.Invalid(NonEmptyList.of(ParseFailure("Decode failure", v)))
-
-        case None =>
-          Validated.Invalid(NonEmptyList.of(ParseFailure("Not a valid base64 string", v)))
-
   given [A: Codec]: Codec[AppendEntries[A]] = Codec.derived
   given Codec[AppendResponse] = Codec.derived
   given Codec[RequestVote]    = Codec.derived
   given Codec[VoteResponse]   = Codec.derived
 
-  given [F[_]: Concurrent, A](using c: Codec[A]): EntityEncoder[F, A] =
-    EntityEncoder.simple()(x => Chunk.array(x.encode.toArray))
-
-  given [F[_]: Concurrent, A: Codec]: EntityDecoder[F, A] =
-    EntityDecoder.byteVector[F].flatMapR: bv =>
-      Codec[A].decodeValue(bv.bits) match
-        case Successful(value) =>
-          org.http4s.DecodeResult.successT(value)
-        case Failure(cause) =>
-          org.http4s.DecodeResult.failureT(org.http4s.MalformedMessageBodyFailure(cause.message))
+  given [F[_]: Concurrent, A: Decoder]: EntityDecoder[F, A] = jsonOf
+  given [F[_]: Concurrent, A: Encoder]: EntityEncoder[F, A] = jsonEncoderOf

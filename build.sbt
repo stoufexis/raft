@@ -24,8 +24,6 @@ lazy val rpc =
     "org.http4s" %% "http4s-dsl"          % "0.23.28",
     "org.http4s" %% "http4s-core"         % "0.23.28",
     "org.http4s" %% "http4s-circe"        % "0.23.28",
-    "org.http4s" %% "http4s-netty-server" % "0.5.19",
-    "org.http4s" %% "http4s-netty-client" % "0.5.19",
     "io.circe"   %% "circe-core"          % "0.14.1",
     "io.circe"   %% "circe-generic"       % "0.14.1",
     "io.circe"   %% "circe-parser"        % "0.14.1"
@@ -39,8 +37,7 @@ lazy val persist =
 
 lazy val binary =
   Seq(
-    "org.scodec" %% "scodec-core" % "2.3.1",
-    "co.fs2"     %% "fs2-scodec"  % "3.10.2"
+    "org.scodec" %% "scodec-core" % "2.3.1"
   )
 
 lazy val test =

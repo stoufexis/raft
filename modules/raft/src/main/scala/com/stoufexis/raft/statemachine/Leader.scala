@@ -15,6 +15,7 @@ import com.stoufexis.raft.typeclass.IntLike.*
 
 import scala.collection.immutable.Queue
 import scala.concurrent.duration.FiniteDuration
+import com.stoufexis.raft.typeclass.Empty
 
 object Leader:
 
@@ -28,7 +29,7 @@ object Leader:
     * replicate the log. The state machine in other nodes is reconstructed from the log if they become the
     * leader. TODO: I think this means I can get rid of the leaderCommit in AppendEntries requests
     */
-  def apply[F[_]: Temporal: Logger, In, Out, S: Monoid](state: NodeInfo)(using
+  def apply[F[_]: Temporal: Logger, In, Out, S: Empty](state: NodeInfo)(using
     config: Config[F, In, Out, S]
   ): Resource[F, Behaviors[F]] =
     for
@@ -106,7 +107,7 @@ object Leader:
     * A bound on the number of concurrent waiting clients is not enforced here. Such a bound must be enforced
     * upstream, in incomingClientRequests.
     */
-  def stateMachine[F[_], In, Out, S: Monoid](
+  def stateMachine[F[_], In, Out, S: Empty](
     state:    NodeInfo,
     matchIdx: CloseableTopic[F, (NodeId, Index)],
     newIdxs:  CloseableTopic[F, Index]
@@ -122,7 +123,7 @@ object Leader:
       initS <-
         config.log
           .rangeStream(Index.uninitiated, initIdx)
-          .fold(Monoid[S].empty):
+          .fold(Empty[S].empty):
             case (s, (_, c)) => config.automaton(s, c.value)._1
 
       // Assumes that matchIdxs for each node always increase

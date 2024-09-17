@@ -2,7 +2,9 @@ package com.stoufexis.raft.kvstore.statemachine
 
 import cats.implicits.given
 
-case class KvState(map: Map[String, (String, Long)]):
+import com.stoufexis.raft.typeclass.Empty
+
+case class KvState(map: Map[String, (String, Long)]) derives Empty:
   def setAll(sets: Map[String, Option[String]]): KvState = KvState:
     sets.foldLeft(map): (acc, set) =>
       acc.updatedWith(set._1):

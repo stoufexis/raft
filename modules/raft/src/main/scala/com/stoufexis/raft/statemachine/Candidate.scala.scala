@@ -11,7 +11,7 @@ import com.stoufexis.raft.model.*
 import com.stoufexis.raft.rpc.*
 
 object Candidate:
-  def apply[F[_]: Logger: Temporal, In, S: Monoid](state: NodeInfo)(using
+  def apply[F[_]: Logger: Temporal, In, S](state: NodeInfo)(using
     cfg: Config[F, In, ?, S]
   ): Behaviors[F] =
     Behaviors(

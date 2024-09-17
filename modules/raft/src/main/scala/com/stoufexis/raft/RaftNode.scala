@@ -3,7 +3,6 @@ package com.stoufexis.raft
 import cats.effect.kernel.*
 import cats.effect.std.Supervisor
 import cats.implicits.given
-import cats.kernel.Monoid
 
 import com.stoufexis.raft.model.*
 import com.stoufexis.raft.persist.*
@@ -11,6 +10,7 @@ import com.stoufexis.raft.rpc.*
 import com.stoufexis.raft.statemachine.*
 
 import scala.concurrent.duration.*
+import com.stoufexis.raft.typeclass.Empty
 
 trait RaftNode[F[_], In, Out, S]:
   def requestVote(req: RequestVote): F[VoteResponse]
@@ -54,7 +54,7 @@ object RaftNode:
     def withAppenderBatchSize(size: Int): Builder[F, In, Out, S] =
       copy(appenderBatchSize = size)
 
-    def build(using Async[F], Monoid[S]): Resource[F, RaftNode[F, In, Out, S]] =
+    def build(using Async[F], Empty[S]): Resource[F, RaftNode[F, In, Out, S]] =
       Supervisor[F](await = false).evalMap: supervisor =>
         for
           inputs: Inputs[F, In, Out, S] <-

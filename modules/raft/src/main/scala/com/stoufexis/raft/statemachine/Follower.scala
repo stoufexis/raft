@@ -13,7 +13,7 @@ import com.stoufexis.raft.rpc.*
 import com.stoufexis.raft.typeclass.IntLike.*
 
 object Follower:
-  def apply[F[_]: Temporal: Logger, In, S: Monoid](state: NodeInfo)(using
+  def apply[F[_]: Temporal: Logger, In, S](state: NodeInfo)(using
     cfg: Config[F, In, ?, S]
   ): Behaviors[F] =
     Behaviors(

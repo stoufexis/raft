@@ -39,7 +39,7 @@ class Routes[F[_]: Concurrent](raft: RaftNode[F, KvCommand, KvResponse, KvState]
 
   object UpdateKeys:
     def unapply(params: Map[String, collection.Seq[String]]): Option[Map[String, Option[String]]] =
-      // I think last is safe here
+      // I think .last is safe here
       Some(params.fmap(_.last).fmap(Some(_).filter(_.nonEmpty))).filter(_.nonEmpty)
 
   case object Cid extends QueryParamDecoderMatcher[CommandId]("command_id")
