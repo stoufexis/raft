@@ -1,19 +1,25 @@
 package com.stoufexis.raft.kvstore.rpc
 
-import cats.MonadThrow
+import cats.effect.Concurrent
+import org.http4s.client.Client
+import org.http4s.{Method, Request}
 
 import com.stoufexis.raft.ExternalNode
+import com.stoufexis.raft.kvstore.implicits.given
 import com.stoufexis.raft.kvstore.statemachine.KvCommand
 import com.stoufexis.raft.model.*
 import com.stoufexis.raft.rpc.*
+import com.stoufexis.raft.kvstore.*
 
-object Client:
-  def externalNode[F[_]](nodeId: NodeId)(using
-    F: MonadThrow[F]
+object Clients:
+  def externalNode[F[_]](nodeId: NodeId, client: Client[F])(using
+    F: Concurrent[F]
   ): ExternalNode[F, KvCommand] =
     new:
-      override val id: NodeId = ???
+      val id: NodeId = nodeId
 
-      override def appendEntries(req: AppendEntries[KvCommand]): F[AppendResponse] = ???
+      def appendEntries(req: AppendEntries[KvCommand]): F[AppendResponse] =
+        client.expect(Request[F](Method.PUT, nodeId.toUri / "raft" / "append_entries").withEntity(req))
 
-      override def requestVote(request: RequestVote): F[VoteResponse] = ???
+      def requestVote(req: RequestVote): F[VoteResponse] =
+        client.expect(Request[F](Method.PUT, nodeId.toUri / "raft" / "request_vote").withEntity(req))

@@ -39,7 +39,8 @@ lazy val persist =
 
 lazy val binary =
   Seq(
-    "org.scodec" %% "scodec-core" % "2.3.1"
+    "org.scodec" %% "scodec-core" % "2.3.1",
+    "co.fs2"     %% "fs2-scodec"  % "3.10.2"
   )
 
 lazy val test =

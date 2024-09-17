@@ -2,17 +2,20 @@ package com.stoufexis.raft.kvstore
 
 import cats.*
 import cats.data.*
+import cats.effect.*
 import doobie.util.{Get, Put}
-import io.circe
-import io.circe.Json
-import io.circe.syntax.given
+import fs2.Chunk
+import org.http4s.EntityDecoder
+import org.http4s.EntityEncoder
 import org.http4s.{ParseFailure, QueryParamDecoder, QueryParameterValue}
 import scodec.*
+import scodec.Attempt.Failure
+import scodec.Attempt.Successful
 import scodec.Codec.{given_Codec_Long, given_Codec_String}
 import scodec.bits.BitVector
 
+import com.stoufexis.raft.kvstore.*
 import com.stoufexis.raft.kvstore.statemachine.*
-import com.stoufexis.raft.kvstore.rpc.*
 import com.stoufexis.raft.model.*
 import com.stoufexis.raft.rpc.*
 
@@ -38,9 +41,6 @@ object implicits:
   given Put[NodeId]   = NodeId.deriveContravariant
   given Get[NodeId]   = NodeId.deriveFunctor
   given Codec[NodeId] = Codec(NodeId.deriveContravariant, NodeId.deriveFunctor)
-
-  given Codec[Nothing] =
-    Codec(_ => throw RuntimeException("unreachable"), a => Attempt.Failure(Err("Decoding to nothing")))
 
   given [A: Codec]: Codec[Command[A]] = Codec.derived
 
@@ -79,11 +79,6 @@ object implicits:
 
     override def toString = s"set($codec)"
 
-  given [A: Codec]: Codec[AppendEntries[A]] = Codec.derived
-  given Codec[AppendResponse] = Codec.derived
-  given Codec[RequestVote]    = Codec.derived
-  given Codec[VoteResponse]   = Codec.derived
-
   given QueryParamDecoder[CommandId] with
     def decode(value: QueryParameterValue): ValidatedNel[ParseFailure, CommandId] =
       Validated.Valid(CommandId(value.value))
@@ -102,3 +97,19 @@ object implicits:
 
         case None =>
           Validated.Invalid(NonEmptyList.of(ParseFailure("Not a valid base64 string", v)))
+
+  given [A: Codec]: Codec[AppendEntries[A]] = Codec.derived
+  given Codec[AppendResponse] = Codec.derived
+  given Codec[RequestVote]    = Codec.derived
+  given Codec[VoteResponse]   = Codec.derived
+
+  given [F[_]: Concurrent, A](using c: Codec[A]): EntityEncoder[F, A] =
+    EntityEncoder.simple()(x => Chunk.array(x.encode.toArray))
+
+  given [F[_]: Concurrent, A: Codec]: EntityDecoder[F, A] =
+    EntityDecoder.byteVector[F].flatMapR: bv =>
+      Codec[A].decodeValue(bv.bits) match
+        case Successful(value) =>
+          org.http4s.DecodeResult.successT(value)
+        case Failure(cause) =>
+          org.http4s.DecodeResult.failureT(org.http4s.MalformedMessageBodyFailure(cause.message))
