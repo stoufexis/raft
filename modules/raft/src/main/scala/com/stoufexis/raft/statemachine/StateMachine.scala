@@ -3,7 +3,6 @@ package com.stoufexis.raft.statemachine
 import cats.*
 import cats.effect.kernel.*
 import cats.implicits.given
-import fs2.*
 import org.typelevel.log4cats.Logger
 
 import com.stoufexis.raft.model.*

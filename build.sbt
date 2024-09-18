@@ -1,3 +1,5 @@
+import com.typesafe.sbt.packager.docker.*
+
 ThisBuild / scalaVersion := "3.4.2"
 ThisBuild / name         := "raft"
 ThisBuild / version      := "0.1.0-SNAPSHOT"
@@ -75,9 +77,11 @@ lazy val kvstore =
       libraryDependencies ++= cats ++ log ++ rpc ++ binary ++ test ++ persist,
       scalacOptions ++= commonCompileFlags,
       // docker
-      dockerExposedPorts ++= Seq(8080),
       dockerBaseImage := "openjdk:11",
-      dockerExposedVolumes := Seq("/opt/var/keystore")
+      dockerCommands += Cmd("USER", "root"),
+      dockerCommands += Cmd("RUN", "mkdir", "/var/opt/sqlite"),
+      dockerCommands += Cmd("RUN", "chown", (Docker / daemonUser).value, "/var/opt/sqlite"),
+      dockerCommands += Cmd("USER", (Docker / daemonUser).value)
     )
 
 lazy val root =

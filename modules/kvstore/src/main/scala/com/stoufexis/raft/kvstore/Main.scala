@@ -7,6 +7,7 @@ import org.http4s.ember.client.EmberClientBuilder
 import org.http4s.ember.server.EmberServerBuilder
 import org.typelevel.log4cats.Logger
 import org.typelevel.log4cats.slf4j.Slf4jLogger
+import scala.concurrent.duration.*
 
 import com.stoufexis.raft.RaftNode
 import com.stoufexis.raft.kvstore.persist.SqlitePersistence
@@ -15,11 +16,10 @@ import com.stoufexis.raft.kvstore.rpc.RpcClient
 import com.stoufexis.raft.kvstore.statemachine.*
 
 object Main extends IOApp.Simple:
-  def raftNode(cfg: KvStoreConfig): Resource[IO, RaftNode[IO, KvCommand, KvResponse, KvState]] =
+  def raftNode(cfg: KvStoreConfig)(using
+    Logger[IO]
+  ): Resource[IO, RaftNode[IO, KvCommand, KvResponse, KvState]] =
     for
-      given Logger[IO] <-
-        Resource.eval(Slf4jLogger.fromName[IO]("KvStore"))
-
       (log, persist) <-
         SqlitePersistence[IO, KvCommand](cfg.sqliteDbPath, cfg.sqliteFetchSize)
 
@@ -31,10 +31,11 @@ object Main extends IOApp.Simple:
         RaftNode
           .builder(cfg.thisNode, StateMachine(_, _), log, persist)
           .withExternals(clients*)
+          .withElectionTimeout(5.seconds, 10.seconds)
           .build
     yield rn
 
-  def serverFromRaft(rn: RaftNode[IO, KvCommand, KvResponse, KvState]): IO[Nothing] =
+  def serverFromRaft(cfg: KvStoreConfig, rn: RaftNode[IO, KvCommand, KvResponse, KvState]): IO[Nothing] =
     val routes: Routes[IO] =
       Routes[IO](rn)
 
@@ -42,7 +43,7 @@ object Main extends IOApp.Simple:
       EmberServerBuilder
         .default[IO]
         .withHost(ipv4"0.0.0.0")
-        .withPort(port"8080")
+        .withPort(cfg.clientPort)
         .withHttp2
         .withHttpApp(routes.clientRoutes.orNotFound)
         .build
@@ -52,7 +53,7 @@ object Main extends IOApp.Simple:
       EmberServerBuilder
         .default[IO]
         .withHost(ipv4"0.0.0.0")
-        .withPort(port"8081")
+        .withPort(cfg.raftPort)
         .withHttp2
         .withHttpApp(routes.raftRoutes.orNotFound)
         .build
@@ -62,6 +63,9 @@ object Main extends IOApp.Simple:
 
   def run: IO[Unit] =
     for
+      given Logger[IO] <-
+        Slf4jLogger.fromName[IO]("KvStore")
+
       cfg <- KvStoreConfig.loadFromEnv[IO]
-      _   <- raftNode(cfg).use(serverFromRaft)
+      _   <- raftNode(cfg).use(serverFromRaft(cfg, _))
     yield ()
