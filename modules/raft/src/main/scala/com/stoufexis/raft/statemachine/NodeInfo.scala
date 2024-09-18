@@ -60,8 +60,8 @@ case class NodeInfo(
 
   def hasVoted: Boolean =
     role match
-      case Role.Follower(_) => true
-      case _                => false
+      case Role.Follower(Some(_)) => true
+      case _                      => false
 
   def votedFor: Option[NodeId] =
     role match
