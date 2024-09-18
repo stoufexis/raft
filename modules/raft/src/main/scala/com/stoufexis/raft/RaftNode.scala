@@ -63,8 +63,8 @@ object RaftNode:
           timeout: ElectionTimeout[F] <-
             ElectionTimeout.fromRange[F](electionTimeoutLow, electionTimeoutHigh)
 
-          given Config[F, In, Out, S] =
-            Config(
+          given Deps[F, In, Out, S] =
+            Deps(
               automaton         = automaton,
               log               = log,
               persisted         = persisted,

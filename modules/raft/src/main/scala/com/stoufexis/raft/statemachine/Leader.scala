@@ -10,12 +10,13 @@ import org.typelevel.log4cats.Logger
 import com.stoufexis.raft.*
 import com.stoufexis.raft.ExternalNode
 import com.stoufexis.raft.model.*
+import com.stoufexis.raft.persist.Log
 import com.stoufexis.raft.rpc.*
+import com.stoufexis.raft.typeclass.Empty
 import com.stoufexis.raft.typeclass.IntLike.*
 
 import scala.collection.immutable.Queue
 import scala.concurrent.duration.FiniteDuration
-import com.stoufexis.raft.typeclass.Empty
 
 object Leader:
 
@@ -29,8 +30,15 @@ object Leader:
     * replicate the log. The state machine in other nodes is reconstructed from the log if they become the
     * leader. TODO: I think this means I can get rid of the leaderCommit in AppendEntries requests
     */
-  def apply[F[_]: Temporal: Logger, In, Out, S: Empty](state: NodeInfo)(using
-    config: Config[F, In, Out, S]
+  def apply[F[_], In, Out, S: Empty](state: NodeInfo)(using
+    F:         Temporal[F],
+    logger:    Logger[F],
+    cluster:   Cluster[F, In],
+    timeout:   ElectionTimeout[F],
+    log:       Log[F, In],
+    automaton: Automaton[In, Out, S],
+    inputs:    InputSource[F, In, Out, S],
+    bs:        AppenderCfg
   ): Resource[F, Behaviors[F]] =
     for
       // Closes the topics after a single NodeInfo is produced
@@ -43,24 +51,21 @@ object Leader:
         CloseableTopic[F, (NodeId, Index)]
 
       appenders: List[Stream[F, NodeInfo]] =
-        config
-          .cluster
+        cluster
           .otherNodes
           .toList
-          .map(appender(state, _, newIdxs, matchIdxs, config))
+          .map(appender(state, _, newIdxs, matchIdxs))
 
       inputs: Behaviors[F] =
         Behaviors(
           appends(state),
           votes(state),
-          partitionChecker(state, matchIdxs, config),
+          partitionChecker(state, matchIdxs),
           stateMachine(state, matchIdxs, newIdxs)
         )
     yield inputs ++ appenders
 
-  def votes[F[_]: MonadThrow: Logger, In, Out, S](state: NodeInfo)(using
-    inputs: InputSource[F, In, Out, S]
-  ): Stream[F, NodeInfo] =
+  def votes[F[_]: MonadThrow: Logger](state: NodeInfo)(using inputs: InputVotes[F]): Stream[F, NodeInfo] =
     inputs.incomingVotes.evalMapFirstSome:
       case IncomingVote(req, sink) if state.isExpired(req.term) =>
         req.termExpired(state, sink) as None
@@ -74,8 +79,8 @@ object Leader:
       case IncomingVote(req, sink) =>
         Some(state.toFollowerUnknownLeader(req.term)).pure[F]
 
-  def appends[F[_]: MonadThrow: Logger, In, Out, S](state: NodeInfo)(using
-    inputs: InputSource[F, In, Out, S]
+  def appends[F[_]: MonadThrow: Logger, In](state: NodeInfo)(using
+    inputs: InputAppends[F, In]
   ): Stream[F, NodeInfo] =
     inputs.incomingAppends.evalMapFirstSome:
       case IncomingAppend(req, sink) if state.isExpired(req.term) =>
@@ -112,19 +117,23 @@ object Leader:
     matchIdx: CloseableTopic[F, (NodeId, Index)],
     newIdxs:  CloseableTopic[F, Index]
   )(using
-    F:      Temporal[F],
-    logger: Logger[F],
-    config: Config[F, In, Out, S]
+    F:         Temporal[F],
+    logger:    Logger[F],
+    cluster:   Cluster[F, In],
+    timeout:   ElectionTimeout[F],
+    log:       Log[F, In],
+    automaton: Automaton[In, Out, S],
+    inputs:    InputClients[F, In, Out, S]
   ): Stream[F, Nothing] =
     for
-      initIdx <- Stream.eval(config.log.lastTermIndex.map(_.fold(Index.uninitiated)(_._2)))
+      initIdx <- Stream.eval(log.lastTermIndex.map(_.fold(Index.uninitiated)(_._2)))
       _       <- Stream.eval(newIdxs.publish(initIdx))
 
       initS <-
-        config.log
+        log
           .rangeStream(Index.uninitiated, initIdx)
           .fold(Empty[S].empty):
-            case (s, (_, c)) => config.automaton(s, c.value)._1
+            case (s, (_, c)) => automaton(s, c.value)._1
 
       // Assumes that matchIdxs for each node always increase
       commitIdx: Stream[F, Index] =
@@ -132,12 +141,12 @@ object Leader:
           .subscribeUnbounded
           .scan(Map.empty[NodeId, Index])(_ + _)
           // TODO: Unify the cluster majority related functions
-          .mapFilter(Pure.commitIdxFromMatch(config.cluster.otherNodeIds, _))
+          .mapFilter(Pure.commitIdxFromMatch(cluster.otherNodeIds, _))
           .dropping(1)
           .evalTap(cidx => logger.debug(s"Commit index is now at $cidx"))
 
       commitsAndAppends: Stream[F, Either[Index, IncomingClientRequest[F, In, Out, S]]] =
-        commitIdx.mergeEither(config.inputs.incomingClientRequests)
+        commitIdx.mergeEither(inputs.incomingClientRequests)
 
       // Waiting clients in the vector are assumed to have non-overlapping and continuous indexes
       acc: (Queue[WaitingClient[F, Out, S]], S) =
@@ -146,11 +155,11 @@ object Leader:
       out: Nothing <-
         commitsAndAppends.evalScanDrain(acc):
           case ((clients, s), Left(commitIdx)) =>
-            clients.fulfill(commitIdx, s, config.automaton)
+            clients.fulfill(commitIdx, s, automaton(_, _))
 
           case (acc @ (clients, s), Right(req)) =>
             val ifNotExists: F[(Queue[WaitingClient[F, Out, S]], S)] =
-              config.log
+              log
                 .append(state.term, NonEmptySeq.of(req.entry))
                 .flatTap(newIdxs.publish(_))
                 .map(i => (clients.enqueue(i, req.sink), s))
@@ -158,7 +167,7 @@ object Leader:
             val ifExists: F[(Queue[WaitingClient[F, Out, S]], S)] =
               req.sink.complete(ClientResponse.Skipped(s)) as acc
 
-            config.log
+            log
               .commandIdExists(req.entry.id)
               .ifM(ifExists, ifNotExists)
     yield out
@@ -167,21 +176,23 @@ object Leader:
     * follower. This makes sure that a partitioned leader will quickly stop acting as a leader, even if it
     * does not notice another leader with a higher term.
     */
-  def partitionChecker[F[_], In, Out, S](
+  def partitionChecker[F[_], In](
     state:     NodeInfo,
-    matchIdxs: CloseableTopic[F, (NodeId, Index)],
-    config:    Config[F, In, Out, S]
+    matchIdxs: CloseableTopic[F, (NodeId, Index)]
   )(using
-    F:      Temporal[F],
-    logger: Logger[F]
+    F:       Temporal[F],
+    logger:  Logger[F],
+    cluster: Cluster[F, In],
+    timeout: ElectionTimeout[F],
+    log:     Log[F, In]
   ): Stream[F, NodeInfo] =
     for
       electionTimeout: FiniteDuration <-
-        Stream.eval(config.timeout.nextElectionTimeout)
+        Stream.eval(timeout.nextElectionTimeout)
 
       out: NodeInfo <-
         matchIdxs.subscribeUnbounded.resettableTimeoutAccumulate(
-          init      = Set(config.cluster.currentNode),
+          init      = Set(cluster.currentNode),
           timeout   = electionTimeout,
           onTimeout = F.pure(state.toFollowerUnknownLeader)
         ):
@@ -196,8 +207,8 @@ object Leader:
               logger.debug(s"Received response from $node")
 
             // TODO: Unify the cluster majority related functions
-            if config.cluster.isMajority(newNodes) then
-              ResettableTimeout.Reset(info as Set(config.cluster.currentNode))
+            if cluster.isMajority(newNodes) then
+              ResettableTimeout.Reset(info as Set(cluster.currentNode))
             else
               ResettableTimeout.Skip(debug as newNodes)
     yield out
@@ -223,13 +234,17 @@ object Leader:
     * Whenever a node responds to an rpc request, we know that we are not partitioned from it, so we re-emit
     * the latest matchIdx in the matchIdxs topic. This keeps the partition checker from timing out.
     */
-  def appender[F[_], In, Out, S](
+  def appender[F[_], In](
     state:     NodeInfo,
     node:      ExternalNode[F, In],
     newIdxs:   CloseableTopic[F, Index],
-    matchIdxs: CloseableTopic[F, (NodeId, Index)],
-    config:    Config[F, In, Out, S]
-  )(using F: Temporal[F]): Stream[F, NodeInfo] =
+    matchIdxs: CloseableTopic[F, (NodeId, Index)]
+  )(using
+    F:       Temporal[F],
+    log:     Log[F, In],
+    bs:      AppenderCfg,
+    cluster: Cluster[F, In]
+  ): Stream[F, NodeInfo] =
     def send(matchIdxO: Option[Index], newIdx: Index): F[(Option[Index], Option[NodeInfo])] =
       val matchIdx: Index =
         matchIdxO.getOrElse(newIdx)
@@ -245,24 +260,24 @@ object Leader:
         seek:     Boolean = false
       ): F[Either[Index, NodeInfo]] =
         val startIdx: Index = matchIdx + 1
-        val endIdx:   Index = startIdx + config.appenderBatchSize
+        val endIdx:   Index = startIdx + bs.appenderBatchSize
 
         val term: F[Term] =
           if matchIdx <= Index.uninitiated then
             F.pure(Term.uninitiated)
           else
-            config.log.term(matchIdx)
+            log.term(matchIdx)
 
         val info: F[(Term, Seq[Command[In]])] =
           term.product:
             if seek
             then F.pure(Seq.empty)
-            else config.log.range(startIdx, endIdx)
+            else log.range(startIdx, endIdx)
 
         info.flatMap: (matchIdxTerm, entries) =>
           val request: AppendEntries[In] =
             AppendEntries(
-              leaderId     = config.cluster.currentNode,
+              leaderId     = cluster.currentNode,
               term         = state.term,
               prevLogIndex = matchIdx,
               prevLogTerm  = matchIdxTerm,
@@ -299,5 +314,5 @@ object Leader:
     newIdxs
       .subscribeUnbounded
       .dropping(1)
-      .repeatLast(config.heartbeatEvery)
+      .repeatLast(bs.heartbeatEvery)
       .evalMapAccumulateFirstSome(Option.empty[Index])(send(_, _))

@@ -31,11 +31,11 @@ object Follower:
   def isUpToDate(lastLogTerm: Term, lastLogIndex: Index, req: RequestVote): Boolean =
     req.lastLogTerm > lastLogTerm || (req.lastLogTerm == lastLogTerm && req.lastLogIndex >= lastLogIndex)
 
-  def votes[F[_], In, S](state: NodeInfo)(using
+  def votes[F[_], In](state: NodeInfo)(using
     F:      Temporal[F],
     logger: Logger[F],
     log:    Log[F, In],
-    inputs: InputSource[F, In, ?, S]
+    inputs: InputVotes[F]
   ): Stream[F, NodeInfo] =
     if state.hasVoted then
       inputs.incomingVotes.evalMapFirstSome:
@@ -69,12 +69,12 @@ object Follower:
             F.pure(Some(state.toFollowerUnknownLeader(req.term)))
       yield out
 
-  def appends[F[_], In, S](state: NodeInfo)(using
+  def appends[F[_], In](state: NodeInfo)(using
     F:       Temporal[F],
     logger:  Logger[F],
     log:     Log[F, In],
     timeout: ElectionTimeout[F],
-    inputs:  InputSource[F, In, ?, S]
+    inputs:  InputAppends[F, In]
   ): Stream[F, NodeInfo] =
     for
       electionTimeout: FiniteDuration <-

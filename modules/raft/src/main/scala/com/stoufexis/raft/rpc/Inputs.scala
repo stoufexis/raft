@@ -6,12 +6,19 @@ import fs2.*
 
 import com.stoufexis.raft.model.Command
 
-trait InputSource[F[_], In, Out, S]:
+trait InputVotes[F[_]]:
   def incomingVotes: Stream[F, IncomingVote[F]]
 
+trait InputAppends[F[_], In]:
   def incomingAppends: Stream[F, IncomingAppend[F, In]]
 
+trait InputClients[F[_], In, Out, S]:
   def incomingClientRequests: Stream[F, IncomingClientRequest[F, In, Out, S]]
+
+trait InputSource[F[_], In, Out, S]
+    extends InputVotes[F]
+    with InputAppends[F, In]
+    with InputClients[F, In, Out, S]
 
 trait InputSink[F[_], In, Out, S]:
   def requestVote(req: RequestVote): F[VoteResponse]
