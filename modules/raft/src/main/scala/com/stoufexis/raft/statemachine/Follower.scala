@@ -11,6 +11,7 @@ import com.stoufexis.raft.model.*
 import com.stoufexis.raft.persist.Log
 import com.stoufexis.raft.rpc.*
 import com.stoufexis.raft.typeclass.IntLike.*
+
 import scala.concurrent.duration.FiniteDuration
 
 object Follower:
@@ -23,7 +24,9 @@ object Follower:
     )
 
   /** Appends and votes are unified since the vote state machine needs to know the current index of the log.
-    * Keeping it in the local loop is more efficient that always reading it from the log.
+    * This also means isUpToDate does not have to access the log, meaning we avoid any timeouts that may
+    * happen during trying to figure out if the candidated log is up to date, if reading from the log is slow.
+    * Instead, we keep the index from when we last appended.
     */
   def appendsAndVotes[F[_], In, S](state: NodeInfo)(using
     F:       Temporal[F],
