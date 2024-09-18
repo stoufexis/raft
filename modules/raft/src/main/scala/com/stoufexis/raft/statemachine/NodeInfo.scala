@@ -12,10 +12,10 @@ case class NodeInfo(
     s"${role.toString}(term = ${term.toLong})"
 
   def toFollower(newTerm: Term, leaderId: NodeId): NodeInfo =
-    copy(role = Role.Follower(None), term = newTerm, knownLeader = Some(leaderId))
+    copy(role = Role.Follower(Some(leaderId)), term = newTerm, knownLeader = Some(leaderId))
 
   def toFollower(leaderId: NodeId): NodeInfo =
-    copy(role = Role.Follower(None), knownLeader = Some(leaderId))
+    copy(role = Role.Follower(Some(leaderId)), knownLeader = Some(leaderId))
 
   def toFollowerUnknownLeader(newTerm: Term): NodeInfo =
     copy(role = Role.Follower(None), term = newTerm, knownLeader = None)
