@@ -44,24 +44,32 @@ object Leader:
       // Closes the topics after a single NodeInfo is produced
       // Closing the topics interrupts subscribers and makes publishes no-ops
       // Any further writes or reads will return None
-      newIdxs: CloseableTopic[F, Index] <-
-        CloseableTopic[F, Index]
+      newIdxs: BufferedTopic[F, Index] <-
+        BufferedTopic[F, Index]
 
-      matchIdxs: CloseableTopic[F, (NodeId, Index)] <-
-        CloseableTopic[F, (NodeId, Index)]
+      matchIdxs: BufferedTopic[F, (NodeId, Index)] <-
+        BufferedTopic[F, (NodeId, Index)]
 
-      appenders: List[Stream[F, NodeInfo]] =
-        cluster
-          .otherNodes
-          .toList
-          .map(appender(state, _, newIdxs, matchIdxs))
+      // Creating subscribers before the streams start running 
+      // so messages are enqueued if the subscriber hasnt started to pull yet
+      appenders: List[Stream[F, NodeInfo]] <-
+        cluster.otherNodes.toList.traverse: node =>
+          newIdxs
+            .newSubscriber
+            .map(appender(state, node, _, matchIdxs))
+
+      msub1: Stream[F, (NodeId, Index)] <-
+        matchIdxs.newSubscriber
+
+      msub2: Stream[F, (NodeId, Index)] <-
+        matchIdxs.newSubscriber
 
       inputs: Behaviors[F] =
         Behaviors(
           appends(state),
           votes(state),
-          partitionChecker(state, matchIdxs),
-          stateMachine(state, matchIdxs, newIdxs)
+          partitionChecker(state, msub1),
+          stateMachine(state, msub2, newIdxs)
         )
     yield inputs ++ appenders
 
@@ -114,8 +122,8 @@ object Leader:
     */
   def stateMachine[F[_], In, Out, S: Empty](
     state:    NodeInfo,
-    matchIdx: CloseableTopic[F, (NodeId, Index)],
-    newIdxs:  CloseableTopic[F, Index]
+    matchIdx: Stream[F, (NodeId, Index)],
+    newIdxs:  BufferedPublisher[F, Index]
   )(using
     F:         Temporal[F],
     logger:    Logger[F],
@@ -138,7 +146,6 @@ object Leader:
       // Assumes that matchIdxs for each node always increase
       commitIdx: Stream[F, Index] =
         matchIdx
-          .subscribeUnbounded
           .scan(Map.empty[NodeId, Index])(_ + _)
           // TODO: Unify the cluster majority related functions
           .mapFilter(Pure.commitIdxFromMatch(cluster.otherNodeIds, _))
@@ -178,7 +185,7 @@ object Leader:
     */
   def partitionChecker[F[_], In](
     state:     NodeInfo,
-    matchIdxs: CloseableTopic[F, (NodeId, Index)]
+    matchIdxs: Stream[F, (NodeId, Index)]
   )(using
     F:       Temporal[F],
     logger:  Logger[F],
@@ -191,7 +198,7 @@ object Leader:
         Stream.eval(timeout.nextElectionTimeout)
 
       out: NodeInfo <-
-        matchIdxs.subscribeUnbounded.resettableTimeoutAccumulate(
+        matchIdxs.resettableTimeoutAccumulate(
           init      = Set(cluster.currentNode),
           timeout   = electionTimeout,
           onTimeout = F.pure(state.toFollowerUnknownLeader)
@@ -237,13 +244,14 @@ object Leader:
   def appender[F[_], In](
     state:     NodeInfo,
     node:      ExternalNode[F, In],
-    newIdxs:   CloseableTopic[F, Index],
-    matchIdxs: CloseableTopic[F, (NodeId, Index)]
+    newIdxs:   Stream[F, Index],
+    matchIdxs: BufferedPublisher[F, (NodeId, Index)]
   )(using
     F:       Temporal[F],
     log:     Log[F, In],
     bs:      AppenderCfg,
-    cluster: Cluster[F, In]
+    cluster: Cluster[F, In],
+    logger:  Logger[F]
   ): Stream[F, NodeInfo] =
     def send(matchIdxO: Option[Index], newIdx: Index): F[(Option[Index], Option[NodeInfo])] =
       val matchIdx: Index =
@@ -304,15 +312,14 @@ object Leader:
               F.raiseError(IllegalStateException(msg))
       end go
 
-      go(matchIdx, newIdx, seek = false)
-        .map(_.some.separate)
+      logger.debug(s"Appending $matchIdx to ${node.id}")
+        >> go(matchIdx, newIdx, seek = false).map(_.some.separate)
 
     end send
 
     // assumes that elements in newIdxs are increasing
     // TODO: Make sure that if a NodeInfo is emitted no new sends can be made no matter how fast you pull
     newIdxs
-      .subscribeUnbounded
       .dropping(1)
       .repeatLast(bs.heartbeatEvery)
       .evalMapAccumulateFirstSome(Option.empty[Index])(send(_, _))
