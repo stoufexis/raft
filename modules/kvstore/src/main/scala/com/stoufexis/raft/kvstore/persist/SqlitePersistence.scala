@@ -116,11 +116,11 @@ object SqlitePersistence:
             .update.run.transact(xa).void
 
         def term(index: Index): F[Term] =
-          sql"SELECT term WHERE rowid = $index"
+          sql"SELECT term FROM log WHERE rowid = $index"
             .query[Term].unique.transact(xa)
 
         def rangeStream(from: Index, until: Index): Stream[F, (Index, Command[A])] =
-          sql"SELECT rowid, * WHERE rowid >= $from AND rowid <= $until"
+          sql"SELECT rowid, * FROM log WHERE rowid >= $from AND rowid <= $until"
             .query[(Index, LogRow)]
             .stream
             .transact(xa)
@@ -129,7 +129,7 @@ object SqlitePersistence:
         def lastTermIndex: F[Option[(Term, Index)]] =
           sql"""
             WITH max_rowid AS (
-              SELECT max(rowid) mrowid FROM log
+              SELECT max(rowid) AS mrowid FROM log
             )
             SELECT term, rowid 
             FROM log
@@ -147,7 +147,7 @@ object SqlitePersistence:
             .transact(xa)
 
         def range(from: Index, until: Index): F[Seq[Command[A]]] =
-          sql"SELECT * WHERE rowid >= $from AND rowid <= $until"
+          sql"SELECT * FROM log WHERE rowid >= $from AND rowid <= $until"
             .query[LogRow]
             .stream
             .evalMap(_.getCommand[ConnectionIO])
