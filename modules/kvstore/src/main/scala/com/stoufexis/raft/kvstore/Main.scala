@@ -32,6 +32,7 @@ object Main extends IOApp.Simple:
           .builder(cfg.thisNode, StateMachine(_, _), log, persist)
           .withExternals(clients*)
           .withElectionTimeout(5.seconds, 10.seconds)
+          .withHeartbeatEvery(1.second)
           .build
     yield rn
 

@@ -7,12 +7,12 @@ import cats.implicits.given
 import fs2.*
 import org.typelevel.log4cats.Logger
 
+import com.stoufexis.raft.model.*
 import com.stoufexis.raft.rpc.*
 import com.stoufexis.raft.typeclass.IntLike
 import com.stoufexis.raft.typeclass.IntLike.*
 
 import scala.concurrent.duration.FiniteDuration
-import com.stoufexis.raft.model.*
 
 extension [F[_]: Monad, A](deferred: DeferredSink[F, A])
   def complete_(a: A): F[Unit] = deferred.complete(a).void
@@ -58,12 +58,13 @@ extension [F[_], A](stream: Stream[F, A])
     * TODO: test
     */
   def repeatLast(repeatEvery: FiniteDuration)(using F: Temporal[F]): Stream[F, A] =
-    stream
-      .map(Option(_))
-      .timeoutOnPullTo(repeatEvery, Stream(Option.empty[A]))
-      .mapFilterAccumulate(Option.empty[A]):
-        case (last, None) => (last, last)
-        case (last, next) => (next, next)
+    def go(tp: Pull.Timed[F, A], previous: Option[A]): Pull[F, A, Unit] =
+      tp.timeout(repeatEvery) >> tp.uncons.flatMap:
+        case Some((Right(elems), next)) => Pull.output(elems) >> go(next, elems.last)
+        case Some((Left(_), next))      => Pull.outputOption1(previous) >> go(next, previous)
+        case None                       => Pull.done
+
+    stream.pull.timed(go(_, None)).stream
 
   def evalScanDrain[S](init: S)(f: (S, A) => F[S]): Stream[F, Nothing] =
     stream.evalScan(init)(f).drain
