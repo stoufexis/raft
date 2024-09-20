@@ -83,7 +83,7 @@ object Candidate:
 
         Stream
           .iterable(cluster.otherNodes)
-          .parEvalMapUnbounded(req)
+          .parEvalMapUnorderedUnbounded(req)
           .resettableTimeoutAccumulate(
             init      = Set(cluster.currentNode),
             onTimeout = F.pure(state.toCandidateNextTerm),

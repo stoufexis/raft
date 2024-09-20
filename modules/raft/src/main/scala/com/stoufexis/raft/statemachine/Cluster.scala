@@ -8,7 +8,7 @@ case class Cluster[F[_], In](
   otherNodes:  List[ExternalNode[F, In]]
 ):
   lazy val allNodes: Set[NodeId] =
-    otherNodes.map(_.id).toSet + currentNode
+    otherNodeIds + currentNode
 
   lazy val otherNodeIds: Set[NodeId] =
     otherNodes.map(_.id).toSet
