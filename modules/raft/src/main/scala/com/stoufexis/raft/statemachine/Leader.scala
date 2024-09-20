@@ -318,7 +318,6 @@ object Leader:
     end send
 
     // assumes that elements in newIdxs are increasing
-    // TODO: Make sure that if a NodeInfo is emitted no new sends can be made no matter how fast you pull
     newIdxs
       .dropping(1)
       .repeatLast(bs.heartbeatEvery)
