@@ -4,27 +4,26 @@ import cats.MonadThrow
 import cats.data.NonEmptySeq
 import cats.effect.kernel.*
 import cats.implicits.given
+import com.zaxxer.hikari.HikariConfig
 import doobie.*
+import doobie.hikari.HikariTransactor
 import doobie.implicits.given
 import doobie.util.*
 import doobie.util.fragment.Fragment
-import doobie.util.transactor.Transactor
 import fs2.*
 import org.typelevel.log4cats.Logger
 import scodec.Attempt.*
 import scodec.Codec
 import scodec.bits.BitVector
 
+import com.stoufexis.raft.kvstore.implicits.given
 import com.stoufexis.raft.model.*
 import com.stoufexis.raft.persist.*
-import com.stoufexis.raft.kvstore.implicits.given
-
-import java.sql.{Connection, DriverManager}
 
 object SqlitePersistence:
   /** Uses a single connection since there is no concurrent use.
     */
-  def apply[F[_], A: Codec](dbPath: String, fetchSize: Int)(using
+  def apply[F[_], A: Codec](dbPath: String, poolSize: Int, fetchSize: Int)(using
     F:      Async[F],
     logger: Logger[F]
   ): Resource[F, (Log[F, A], PersistedState[F])] =
@@ -45,12 +44,6 @@ object SqlitePersistence:
 
     case class PersistedRow(term: Term, vote: Option[NodeId])
 
-    val connectionResource: Resource[F, Connection] =
-      Resource.fromAutoCloseable:
-        F.blocking:
-          Class.forName("org.sqlite.JDBC")
-          DriverManager.getConnection(s"jdbc:sqlite:$dbPath")
-
     val createLogTable: Fragment =
       sql"""
         CREATE TABLE IF NOT EXISTS log(
@@ -69,9 +62,17 @@ object SqlitePersistence:
         );
       """
 
+    val hikariCfg: HikariConfig =
+      // For the full list of hikari configurations see https://github.com/brettwooldridge/HikariCP#gear-configuration-knobs-baby
+      val config = new HikariConfig()
+      config.setDriverClassName("org.sqlite.JDBC")
+      config.setJdbcUrl(s"jdbc:sqlite:$dbPath")
+      config.setMaximumPoolSize(poolSize)
+      config
+
     for
-      xa: Transactor[F] <-
-        connectionResource.map(Transactor.fromConnection(_, None))
+      xa: HikariTransactor[F] <-
+        HikariTransactor.fromHikariConfig(hikariCfg)
 
       _ <- Resource.eval:
         logger.info(s"Setting up log table: ${createLogTable.internals.sql}")

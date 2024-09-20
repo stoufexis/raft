@@ -7,7 +7,6 @@ import org.http4s.ember.client.EmberClientBuilder
 import org.http4s.ember.server.EmberServerBuilder
 import org.typelevel.log4cats.Logger
 import org.typelevel.log4cats.slf4j.Slf4jLogger
-import scala.concurrent.duration.*
 
 import com.stoufexis.raft.RaftNode
 import com.stoufexis.raft.kvstore.persist.SqlitePersistence
@@ -15,13 +14,22 @@ import com.stoufexis.raft.kvstore.rpc.Routes
 import com.stoufexis.raft.kvstore.rpc.RpcClient
 import com.stoufexis.raft.kvstore.statemachine.*
 
+import scala.concurrent.duration.*
+
 object Main extends IOApp.Simple:
   def raftNode(cfg: KvStoreConfig)(using
     Logger[IO]
   ): Resource[IO, RaftNode[IO, KvCommand, KvResponse, KvState]] =
     for
       (log, persist) <-
-        SqlitePersistence[IO, KvCommand](cfg.sqliteDbPath, cfg.sqliteFetchSize)
+        SqlitePersistence[IO, KvCommand](
+          dbPath = cfg.sqliteDbPath,
+          // The leader uses the most connecitons.
+          // At a maximum it can cocurrently use a connection for each node it appends to,
+          // plus one connection for appending entries from clients
+          poolSize  = cfg.otherNodes.size + 1,
+          fetchSize = cfg.sqliteFetchSize
+        )
 
       clients <-
         cfg.otherNodes.traverse: n =>

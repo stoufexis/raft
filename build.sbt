@@ -33,8 +33,9 @@ lazy val rpc =
 
 lazy val persist =
   Seq(
-    "org.tpolecat" %% "doobie-core" % "1.0.0-RC5",
-    "org.xerial"    % "sqlite-jdbc" % "3.46.1.0"
+    "org.tpolecat" %% "doobie-core"   % "1.0.0-RC5",
+    "org.tpolecat" %% "doobie-hikari" % "1.0.0-RC5",
+    "org.xerial"    % "sqlite-jdbc"   % "3.46.1.0"
   )
 
 lazy val binary =

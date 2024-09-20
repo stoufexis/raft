@@ -52,6 +52,8 @@ object Follower:
           F.pure(Some(state.toFollowerUnknownLeader(req.term)))
     else
       for
+        // Keep in mind that this will never happen concurrently with an append in the appends actor.
+        // If an append is happening then hasVoted will have evaluated to true before.
         (lTerm, lIndex) <-
           Stream.eval(log.lastTermIndex.map(_.getOrElse(Term.uninitiated, Index.uninitiated)))
 
