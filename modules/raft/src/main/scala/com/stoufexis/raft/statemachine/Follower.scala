@@ -85,7 +85,7 @@ object Follower:
       out: NodeInfo <-
         inputs.incomingAppends.resettableTimeoutAccumulate(
           init      = (),
-          onTimeout = F.pure(state.toCandidateNextTerm),
+          onTimeout = logger.info("timeout") as state.toCandidateNextTerm,
           timeout   = electionTimeout
         ):
           // APPENDS

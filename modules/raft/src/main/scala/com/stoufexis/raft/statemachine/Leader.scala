@@ -50,7 +50,7 @@ object Leader:
       matchIdxs: BufferedTopic[F, (NodeId, Index)] <-
         BufferedTopic[F, (NodeId, Index)]
 
-      // Creating subscribers before the streams start running 
+      // Creating subscribers before the streams start running
       // so messages are enqueued if the subscriber hasnt started to pull yet
       appenders: List[Stream[F, NodeInfo]] <-
         cluster.otherNodes.toList.traverse: node =>
@@ -149,8 +149,9 @@ object Leader:
           .scan(Map.empty[NodeId, Index])(_ + _)
           // TODO: Unify the cluster majority related functions
           .mapFilter(Pure.commitIdxFromMatch(cluster.otherNodeIds, _))
+          .increasing
           .dropping(1)
-          .evalTap(cidx => logger.debug(s"Commit index is now at $cidx"))
+          .evalTap(cidx => logger.info(s"Commit index is now at $cidx"))
 
       commitsAndAppends: Stream[F, Either[Index, IncomingClientRequest[F, In, Out, S]]] =
         commitIdx.mergeEither(inputs.incomingClientRequests)
@@ -201,17 +202,17 @@ object Leader:
         matchIdxs.resettableTimeoutAccumulate(
           init      = Set(cluster.currentNode),
           timeout   = electionTimeout,
-          onTimeout = F.pure(state.toFollowerUnknownLeader)
+          onTimeout = logger.info("timeout") as state.toFollowerUnknownLeader
         ):
           case (nodes, (node, _)) =>
             val newNodes: Set[NodeId] =
               nodes + node
 
             val info: F[Unit] =
-              logger.info("Cluster majority reached, this node is still the leader")
+              logger.debug("Cluster majority reached")
 
             val debug: F[Unit] =
-              logger.debug(s"Received response from $node")
+              logger.trace(s"Received response from $node")
 
             // TODO: Unify the cluster majority related functions
             if cluster.isMajority(newNodes) then
@@ -312,13 +313,13 @@ object Leader:
               F.raiseError(IllegalStateException(msg))
       end go
 
-      logger.debug(s"Appending $matchIdx to ${node.id}")
-        >> go(matchIdx, newIdx, seek = false).map(_.some.separate)
+      go(matchIdx, newIdx, seek = false).map(_.some.separate)
 
     end send
 
     // assumes that elements in newIdxs are increasing
     newIdxs
+      .evalTap(idx => logger.info(s"Appending $idx to ${node.id}"))
       .dropping(1)
       .repeatLast(bs.heartbeatEvery)
       .evalMapAccumulateFirstSome(Option.empty[Index])(send(_, _))

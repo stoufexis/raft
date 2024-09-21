@@ -86,7 +86,7 @@ object Candidate:
           .parEvalMapUnorderedUnbounded(req)
           .resettableTimeoutAccumulate(
             init      = Set(cluster.currentNode),
-            onTimeout = F.pure(state.toCandidateNextTerm),
+            onTimeout = logger.info("timeout") as state.toCandidateNextTerm,
             timeout   = electionTimeout
           ):
             case (nodes, (node, VoteResponse.Granted)) =>

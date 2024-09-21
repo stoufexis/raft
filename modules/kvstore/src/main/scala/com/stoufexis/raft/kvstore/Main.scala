@@ -39,8 +39,8 @@ object Main extends IOApp.Simple:
         RaftNode
           .builder(cfg.thisNode, StateMachine(_, _), log, persist)
           .withExternals(clients*)
-          .withElectionTimeout(5.seconds, 10.seconds)
-          .withHeartbeatEvery(1.second)
+          .withElectionTimeout(500.millis, 1000.millis)
+          .withHeartbeatEvery(100.millis)
           .build
     yield rn
 

@@ -5,6 +5,7 @@ import cats.effect.kernel.*
 import cats.effect.std.Queue
 import cats.implicits.given
 import fs2.*
+import fs2.concurrent.Channel
 import org.typelevel.log4cats.Logger
 
 import com.stoufexis.raft.model.*
@@ -78,35 +79,41 @@ extension [F[_], A](stream: Stream[F, A])
     init:      S,
     timeout:   FiniteDuration,
     onTimeout: F[B]
-  )(f: (S, A) => ResettableTimeout[F, B, S])(using Temporal[F]): Stream[F, B] =
-    def go(leftover: Chunk[A], timed: Pull.Timed[F, A], s: S): Pull[F, B, Unit] =
-      val reset = timed.timeout(timeout)
+  )(f: (S, A) => ResettableTimeout[F, B, S])(using F: Temporal[F]): Stream[F, B] =
+    def timer(d: Deferred[F, Option[B]], ch: Channel[F, Unit]): Stream[F, Unit] =
+      ch.stream
+        .switchMap(_ => Stream.eval(F.sleep(timeout)))
+        .evalMap(_ => d.complete_(None))
 
-      if leftover.nonEmpty then
-        f(s, leftover.head.get) match
-          case ResettableTimeout.Output(out) =>
-            reset >> Pull.eval(out).flatMap(Pull.output1(_)) >> Pull.done
+    def go(
+      s:   Stream[F, A],
+      d:   Deferred[F, Option[B]],
+      ch:  Channel[F, Unit],
+      acc: S
+    ): Pull[F, Nothing, Unit] =
+      s.pull.uncons1.flatMap:
+        case None =>
+          Pull.done
 
-          case ResettableTimeout.Reset(fs) =>
-            reset >> Pull.eval(fs).flatMap(go(leftover.drop(1), timed, _))
+        case Some((a, tail)) =>
+          f(acc, a) match
+            case ResettableTimeout.Reset(state) =>
+              Pull.eval(ch.send(())) >> Pull.eval(state).flatMap(go(tail, d, ch, _))
 
-          case ResettableTimeout.Skip(fs) =>
-            Pull.eval(fs).flatMap(go(leftover.drop(1), timed, _))
-      else
-        timed.uncons.flatMap:
-          case None =>
-            Pull.done
+            case ResettableTimeout.Skip(state) =>
+              Pull.eval(state).flatMap(go(tail, d, ch, _))
 
-          case Some((Right(chunk), next)) =>
-            go(chunk, next, s)
+            case ResettableTimeout.Output(out) =>
+              Pull.eval(out).flatMap(o => Pull.eval(d.complete_(Some(o))))
 
-          case Some((Left(_), next)) =>
-            Pull.eval(onTimeout).flatMap(Pull.output1(_)) >> Pull.done
-    end go
-
-    stream.pull
-      .timed(t => t.timeout(timeout) >> go(Chunk.empty, t, init))
-      .stream
+    for
+      kill  <- Stream.eval(Deferred[F, Option[B]])
+      reset <- Stream.eval(Channel.synchronous[F, Unit])
+      _     <- timer(kill, reset).interruptWhen(kill.get.void.attempt).spawn
+      _     <- go(stream, kill, reset, init).stream.interruptWhen(kill.get.void.attempt).spawn
+      _     <- Stream.eval(reset.send(()))
+      out   <- Stream.eval(kill.get.flatMap(_.fold(onTimeout)(F.pure)))
+    yield out
 
   def evalMapFirstSome[B](f: A => F[Option[B]]): Stream[F, B] =
     stream.evalMapFilter(f).head
@@ -165,7 +172,10 @@ extension [F[_]](req: AppendEntries[?])(using F: MonadThrow[F], logger: Logger[F
   def accepted(sink: DeferredSink[F, AppendResponse]): F[Unit] =
     for
       _ <- sink.complete_(AppendResponse.Accepted)
-      _ <- logger.debug(s"Append accepted from ${req.leaderId}")
+      _ <- F.pure(req.entries.isEmpty).ifM(
+        logger.debug(s"Heartbeat accepted from ${req.leaderId}"),
+        logger.info(s"Append accepted from ${req.leaderId}")
+      )
     yield ()
 
   def inconsistent(sink: DeferredSink[F, AppendResponse]): F[Unit] =
