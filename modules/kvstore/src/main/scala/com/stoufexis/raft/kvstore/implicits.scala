@@ -31,9 +31,7 @@ object implicits:
   given Get[CommandId]   = CommandId.deriveFunctor
   given Codec[CommandId] = Codec.from(CommandId.deriveFunctor, CommandId.deriveContravariant)
 
-  given Put[NodeId]   = NodeId.deriveContravariant
-  given Get[NodeId]   = NodeId.deriveFunctor
-  given Codec[NodeId] = Codec.from(NodeId.deriveFunctor, NodeId.deriveContravariant)
+  given Codec[NodeId] = Codec.derived
 
   given [A: Codec]: Codec[Command[A]] = Codec.derived
 

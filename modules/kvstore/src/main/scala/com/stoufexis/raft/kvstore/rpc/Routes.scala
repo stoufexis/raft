@@ -6,6 +6,7 @@ import cats.implicits.given
 import io.circe
 import io.circe.syntax.given
 import org.http4s.*
+import org.http4s.Uri.Authority
 import org.http4s.circe.given
 import org.http4s.dsl.*
 import org.http4s.headers.Location
@@ -46,25 +47,27 @@ class Routes[F[_]: Concurrent](raft: RaftNode[F, KvCommand, KvResponse, KvState]
 
   case object Rid extends QueryParamDecoderMatcher[RevisionId]("revision_id")
 
-  def foldResponse(cr: ClientResponse[KvResponse, KvState]): F[Response[F]] =
+  def foldResponse(req: Request[F], cr: ClientResponse[KvResponse, KvState]): F[Response[F]] =
     cr match
       case ClientResponse.Executed(_, output) => Ok((output: KvResponse).asJson)
       case ClientResponse.Skipped(_)          => NotModified()
-      case ClientResponse.Redirect(leaderId)  => TemporaryRedirect(Location(leaderId.toUri))
       case ClientResponse.UnknownLeader()     => TemporaryRedirect()
 
+      case ClientResponse.Redirect(leaderId) =>
+        TemporaryRedirect(Location(req.uri.copy(authority = leaderId.toUriExternal.authority)))
+
   def clientRoutes: HttpRoutes[F] = HttpRoutes.of:
-    case GET -> Root / "store" :? Cid(cid) +& GetKeys(keys) =>
+    case req @ GET -> Root / "store" :? Cid(cid) +& GetKeys(keys) =>
       raft
         .clientRequest(Command(cid, KvCommand.Get(keys)))
-        .flatMap(foldResponse)
+        .flatMap(foldResponse(req, _))
 
-    case PUT -> Root / "store" :? Cid(cid) +& UpdateKeys(keys) =>
+    case req @ PUT -> Root / "store" :? Cid(cid) +& UpdateKeys(keys) =>
       raft
         .clientRequest(Command(cid, KvCommand.Update(keys)))
-        .flatMap(foldResponse)
+        .flatMap(foldResponse(req, _))
 
-    case PUT -> Root / "store" / "tx" :? Cid(cid) +& Rid(rid) +& UpdateKeys(keys) =>
+    case req @ PUT -> Root / "store" / "tx" :? Cid(cid) +& Rid(rid) +& UpdateKeys(keys) =>
       raft
         .clientRequest(Command(cid, KvCommand.TransactionUpdate(rid, keys)))
-        .flatMap(foldResponse)
+        .flatMap(foldResponse(req, _))

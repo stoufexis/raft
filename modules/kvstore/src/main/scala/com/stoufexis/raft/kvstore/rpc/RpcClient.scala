@@ -13,6 +13,7 @@ import com.stoufexis.raft.model.*
 import com.stoufexis.raft.rpc.*
 
 import scala.concurrent.duration.FiniteDuration
+import org.http4s.Uri
 
 object RpcClient:
   def apply[F[_]: Temporal](
@@ -23,11 +24,13 @@ object RpcClient:
     new:
       val id: NodeId = nodeId
 
+      val uri: Uri = nodeId.toUriInternal
+
       val retryingClient: Client[F] =
         Retry(RetryPolicy(_ => Some(retryAfter)))(client)
 
       def appendEntries(req: AppendEntries[KvCommand]): F[AppendResponse] =
-        retryingClient.expect(Request(Method.PUT, nodeId.toUri / "raft" / "append_entries").withEntity(req))
+        retryingClient.expect(Request(Method.PUT, uri / "raft" / "append_entries").withEntity(req))
 
       def requestVote(req: RequestVote): F[VoteResponse] =
-        retryingClient.expect(Request(Method.PUT, nodeId.toUri / "raft" / "request_vote").withEntity(req))
+        retryingClient.expect(Request(Method.PUT, uri / "raft" / "request_vote").withEntity(req))

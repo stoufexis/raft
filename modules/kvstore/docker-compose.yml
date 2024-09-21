@@ -10,8 +10,12 @@ services:
       SQLITE_FETCH_SIZE: 100
       CLIENT_PORT: 80
       RAFT_PORT: 81
-      CURRENT_NODE: node1
-      OTHER_NODES: node2,node3
+      CURRENT_NODE_INTERNAL: "node1:81"
+      CURRENT_NODE_EXTERNAL: "localhost:8081"
+      OTHER_NODE_INTERNAL.0: "node2:81"
+      OTHER_NODE_EXTERNAL.0: "localhost:8082"
+      OTHER_NODE_INTERNAL.1: "node3:81"
+      OTHER_NODE_EXTERNAL.1: "localhost:8083"
 
   node2:
     image: "kvstore:0.1.0-SNAPSHOT"
@@ -24,8 +28,12 @@ services:
       SQLITE_FETCH_SIZE: 100
       CLIENT_PORT: 80
       RAFT_PORT: 81
-      CURRENT_NODE: node2
-      OTHER_NODES: node1,node3
+      CURRENT_NODE_INTERNAL: "node2:81"
+      CURRENT_NODE_EXTERNAL: "localhost:8082"
+      OTHER_NODE_INTERNAL.0: "node1:81"
+      OTHER_NODE_EXTERNAL.0: "localhost:8081"
+      OTHER_NODE_INTERNAL.1: "node3:81"
+      OTHER_NODE_EXTERNAL.1: "localhost:8083"
 
   node3:
     image: "kvstore:0.1.0-SNAPSHOT"
@@ -38,8 +46,13 @@ services:
       SQLITE_FETCH_SIZE: 100
       CLIENT_PORT: 80
       RAFT_PORT: 81
-      CURRENT_NODE: node3
-      OTHER_NODES: node1,node2
+      CURRENT_NODE_INTERNAL: "node3:81"
+      CURRENT_NODE_EXTERNAL: "localhost:8083"
+      OTHER_NODE_INTERNAL.0: "node1:81"
+      OTHER_NODE_EXTERNAL.0: "localhost:8081"
+      OTHER_NODE_INTERNAL.1: "node2:81"
+      OTHER_NODE_EXTERNAL.1: "localhost:8082"
+
 
 volumes:
   node1-data:
