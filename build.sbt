@@ -79,6 +79,7 @@ lazy val kvstore =
       scalacOptions ++= commonCompileFlags,
       // docker
       dockerBaseImage := "openjdk:11",
+      // create directory for sqlite persistence
       dockerCommands += Cmd("USER", "root"),
       dockerCommands += Cmd("RUN", "mkdir", "/var/opt/sqlite"),
       dockerCommands += Cmd("RUN", "chown", (Docker / daemonUser).value, "/var/opt/sqlite"),

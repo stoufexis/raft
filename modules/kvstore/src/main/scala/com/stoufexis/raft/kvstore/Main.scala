@@ -44,16 +44,13 @@ object Main extends IOApp.Simple:
           .build
     yield rn
 
-  def serverFromRaft(cfg: KvStoreConfig, rn: RaftNode[IO, KvCommand, KvResponse, KvState]): IO[Nothing] =
-    val routes: Routes[IO] =
-      Routes[IO](rn)
-
+  def server(cfg: KvStoreConfig, rn: RaftNode[IO, KvCommand, KvResponse, KvState]): IO[Nothing] =
     EmberServerBuilder
       .default[IO]
       .withHost(ipv4"0.0.0.0")
       .withPort(cfg.httpPort)
       .withHttp2
-      .withHttpApp((routes.clientRoutes <+> routes.raftRoutes).orNotFound)
+      .withHttpApp(Routes(rn).orNotFound)
       .build
       .use(_ => IO.never)
 
@@ -63,5 +60,5 @@ object Main extends IOApp.Simple:
         Slf4jLogger.fromName[IO]("KvStore")
 
       cfg <- KvStoreConfig.loadFromEnv[IO]
-      _   <- raftNode(cfg).use(serverFromRaft(cfg, _))
+      _   <- raftNode(cfg).use(server(cfg, _))
     yield ()
