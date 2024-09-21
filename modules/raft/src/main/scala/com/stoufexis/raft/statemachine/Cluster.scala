@@ -13,6 +13,9 @@ case class Cluster[F[_], In](
   lazy val otherNodeIds: Set[NodeId] =
     otherNodes.map(_.id).toSet
 
+  lazy val otherNodesSize: Int =
+    otherNodeIds.size
+
   lazy val majorityCnt: Int =
     allNodes.size / 2 + 1
 

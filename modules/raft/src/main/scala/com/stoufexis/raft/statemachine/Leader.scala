@@ -13,7 +13,7 @@ import com.stoufexis.raft.model.*
 import com.stoufexis.raft.persist.Log
 import com.stoufexis.raft.rpc.*
 import com.stoufexis.raft.typeclass.Empty
-import com.stoufexis.raft.typeclass.IntLike.*
+import com.stoufexis.raft.typeclass.IntLike.{*, given}
 
 import scala.collection.immutable.Queue
 import scala.concurrent.duration.FiniteDuration
@@ -105,6 +105,13 @@ object Leader:
       case IncomingAppend(req, sink) =>
         Some(state.toFollower(req.term, req.leaderId)).pure[F]
 
+  def commitIdxFromMatch(matchIdxs: Map[NodeId, Index])(using c: Cluster[?, ?]): Option[Index] =
+    matchIdxs
+      .toVector
+      .sortBy(_._2)(using Ordering[Index].reverse)
+      .get(c.otherNodesSize / 2 - 1)
+      .map(_._2)
+
   /** Receives client requests and fulfills them. Every request's entries are immediatelly appended to the
     * local log and we attempt to commit them. A commit is initiated by informing the appenders of a new
     * uncommitted index, via a publish to the newIdxs topic. The appenders attempt to append all entries that
@@ -148,7 +155,7 @@ object Leader:
         matchIdx
           .scan(Map.empty[NodeId, Index])(_ + _)
           // TODO: Unify the cluster majority related functions
-          .mapFilter(Pure.commitIdxFromMatch(cluster.otherNodeIds, _))
+          .mapFilter(commitIdxFromMatch)
           .increasing
           .dropping(1)
           .evalTap(cidx => logger.info(s"Commit index is now at $cidx"))
