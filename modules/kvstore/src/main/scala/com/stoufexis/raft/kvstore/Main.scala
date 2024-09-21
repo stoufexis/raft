@@ -33,7 +33,7 @@ object Main extends IOApp.Simple:
 
       clients <-
         cfg.otherNodes.traverse: n =>
-          EmberClientBuilder.default[IO].build.map(RpcClient(n, _))
+          EmberClientBuilder.default[IO].build.map(RpcClient(nodeId = n, retryAfter = 5.seconds, _))
 
       rn <-
         RaftNode
