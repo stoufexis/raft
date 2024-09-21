@@ -8,6 +8,7 @@
   </appender>
 
   <logger name="com.zaxxer.hikari" level="INFO"/>
+  <logger name="org.http4s.client" level="ERROR"/>
 
   <root level="INFO">
       <appender-ref ref="STDOUT"/>
