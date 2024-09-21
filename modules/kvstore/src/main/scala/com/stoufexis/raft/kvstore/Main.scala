@@ -14,8 +14,6 @@ import com.stoufexis.raft.kvstore.rpc.Routes
 import com.stoufexis.raft.kvstore.rpc.RpcClient
 import com.stoufexis.raft.kvstore.statemachine.*
 
-import scala.concurrent.duration.*
-
 object Main extends IOApp.Simple:
   def raftNode(cfg: KvStoreConfig)(using
     Logger[IO]
@@ -33,14 +31,14 @@ object Main extends IOApp.Simple:
 
       clients <-
         cfg.otherNodes.traverse: n =>
-          EmberClientBuilder.default[IO].build.map(RpcClient(nodeId = n, retryAfter = 5.seconds, _))
+          EmberClientBuilder.default[IO].build.map(RpcClient(n, cfg.clientRetryAfter, _))
 
       rn <-
         RaftNode
           .builder(cfg.thisNode, StateMachine(_, _), log, persist)
           .withExternals(clients*)
-          .withElectionTimeout(500.millis, 1000.millis)
-          .withHeartbeatEvery(100.millis)
+          .withElectionTimeout(cfg.electionTimeoutLow, cfg.electionTimeoutHigh)
+          .withHeartbeatEvery(cfg.heartbeatEvery)
           .build
     yield rn
 

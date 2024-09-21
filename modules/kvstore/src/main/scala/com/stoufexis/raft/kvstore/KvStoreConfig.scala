@@ -8,12 +8,19 @@ import org.typelevel.log4cats.Logger
 
 import com.stoufexis.raft.model.NodeId
 
+import scala.concurrent.duration.*
+import scala.concurrent.duration.FiniteDuration
+
 case class KvStoreConfig(
-  thisNode:        NodeId,
-  otherNodes:      List[NodeId],
-  sqliteDbPath:    String,
-  sqliteFetchSize: Int,
-  httpPort:        Port,
+  thisNode:            NodeId,
+  otherNodes:          List[NodeId],
+  sqliteDbPath:        String,
+  sqliteFetchSize:     Int,
+  httpPort:            Port,
+  electionTimeoutLow:  FiniteDuration,
+  electionTimeoutHigh: FiniteDuration,
+  heartbeatEvery:      FiniteDuration,
+  clientRetryAfter:    FiniteDuration
 )
 
 object KvStoreConfig:
@@ -32,11 +39,25 @@ object KvStoreConfig:
 
     val cfg: F[KvStoreConfig] =
       for
-        sqliteDbPath    <- getVar("SQLITE_DB_PATH", _.some)
-        sqliteFetchSize <- getVar("SQLITE_FETCH_SIZE", _.toIntOption)
-        httpPort        <- getVar("HTTP_PORT", _.toIntOption.flatMap(Port.fromInt))
-        thisNode        <- getVar("CURRENT_NODE", x => Some(NodeId(s"$x:${httpPort.value}")))
-        otherNodes      <- getVars("OTHER_NODES", x => Some(NodeId(s"$x:${httpPort.value}")))
-      yield KvStoreConfig(thisNode, otherNodes, sqliteDbPath, sqliteFetchSize, httpPort)
+        sqliteDbPath    <- getVar("KV_SQLITE_DB_PATH", _.some)
+        sqliteFetchSize <- getVar("KV_SQLITE_FETCH_SIZE", _.toIntOption)
+        httpPort        <- getVar("KV_HTTP_PORT", _.toIntOption.flatMap(Port.fromInt))
+        electionLow     <- getVar("KV_ELECTION_TIMEOUT_LOW_MS", _.toLongOption.map(_.millis))
+        electionHigh    <- getVar("KV_ELECTION_TIMEOUT_HIGH_MS", _.toLongOption.map(_.millis))
+        heartbeatEvery  <- getVar("KV_HEARTBEAT_EVERY_MS", _.toLongOption.map(_.millis))
+        retryAfter      <- getVar("KV_CLIENT_RETRY_AFTER_MS", _.toLongOption.map(_.millis))
+        thisNode        <- getVar("KV_CURRENT_NODE", x => Some(NodeId(s"$x:${httpPort.value}")))
+        otherNodes      <- getVars("KV_OTHER_NODES", x => Some(NodeId(s"$x:${httpPort.value}")))
+      yield KvStoreConfig(
+        thisNode            = thisNode,
+        otherNodes          = otherNodes,
+        sqliteDbPath        = sqliteDbPath,
+        sqliteFetchSize     = sqliteFetchSize,
+        httpPort            = httpPort,
+        electionTimeoutLow  = electionLow,
+        electionTimeoutHigh = electionHigh,
+        heartbeatEvery      = heartbeatEvery,
+        clientRetryAfter    = retryAfter
+      )
 
     cfg.flatTap(x => log.debug(s"Loaded config as $x"))
