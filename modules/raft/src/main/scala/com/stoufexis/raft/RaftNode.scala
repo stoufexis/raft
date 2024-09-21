@@ -13,6 +13,8 @@ import scala.concurrent.duration.*
 import com.stoufexis.raft.typeclass.Empty
 
 trait RaftNode[F[_], In, Out, S]:
+  val id: NodeId
+
   def requestVote(req: RequestVote): F[VoteResponse]
 
   def appendEntries(req: AppendEntries[In]): F[AppendResponse]
@@ -29,7 +31,7 @@ object RaftNode:
     Builder(id, automaton, log, persisted)
 
   case class Builder[F[_], In, Out, S](
-    id:                    NodeId,
+    id0:                    NodeId,
     automaton:             (S, In) => (S, Out),
     log:                   Log[F, In],
     persisted:             PersistedState[F],
@@ -68,7 +70,7 @@ object RaftNode:
               automaton         = automaton,
               log               = log,
               persisted         = persisted,
-              cluster           = Cluster(id, otherNodes),
+              cluster           = Cluster(id0, otherNodes),
               heartbeatEvery    = heartbeatEvery,
               timeout           = timeout,
               inputs            = inputs,
@@ -78,6 +80,8 @@ object RaftNode:
           _ <-
             supervisor.supervise(StateMachine.runLoop)
         yield new:
+          val id: NodeId = id0
+
           def requestVote(req: RequestVote): F[VoteResponse] =
             inputs.requestVote(req)
 

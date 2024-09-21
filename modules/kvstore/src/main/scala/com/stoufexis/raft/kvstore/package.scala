@@ -6,10 +6,7 @@ import org.http4s.*
 import com.stoufexis.raft.model.NodeId
 
 extension (node: NodeId)
-  def toUriInternal: Uri =
-    Uri.unsafeFromString(s"http://${node.internalId}")
-
-  def toUriExternal: Uri =
-    Uri.unsafeFromString(s"http://${node.externalId}")
+  def toUri: Uri =
+    Uri.unsafeFromString(s"http://${node.string}")
 
 extension [A](a: A) def encode(using c: Encoder[A]): Json = c(a)

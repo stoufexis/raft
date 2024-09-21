@@ -48,13 +48,21 @@ class Routes[F[_]: Concurrent](raft: RaftNode[F, KvCommand, KvResponse, KvState]
   case object Rid extends QueryParamDecoderMatcher[RevisionId]("revision_id")
 
   def foldResponse(req: Request[F], cr: ClientResponse[KvResponse, KvState]): F[Response[F]] =
+    val currentLocation: Location =
+      Location(req.uri.copy(authority = raft.id.toUri.authority))
+
     cr match
-      case ClientResponse.Executed(_, output) => Ok((output: KvResponse).asJson)
-      case ClientResponse.Skipped(_)          => NotModified()
-      case ClientResponse.UnknownLeader()     => TemporaryRedirect()
+      case ClientResponse.Executed(_, output) =>
+        Ok((output: KvResponse).asJson).map(_.withHeaders(currentLocation))
+
+      case ClientResponse.Skipped(_)          =>
+        NotModified().map(_.withHeaders(currentLocation))
+
+      case ClientResponse.UnknownLeader()     =>
+        TemporaryRedirect().map(_.withHeaders(currentLocation))
 
       case ClientResponse.Redirect(leaderId) =>
-        TemporaryRedirect(Location(req.uri.copy(authority = leaderId.toUriExternal.authority)))
+        TemporaryRedirect(Location(req.uri.copy(authority = leaderId.toUri.authority)))
 
   def clientRoutes: HttpRoutes[F] = HttpRoutes.of:
     case req @ GET -> Root / "store" :? Cid(cid) +& GetKeys(keys) =>

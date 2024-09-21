@@ -47,8 +47,8 @@ object SqlitePersistence:
     val createLogTable: Fragment =
       sql"""
         CREATE TABLE IF NOT EXISTS log(
-            term  INTEGER NOT NULL,
-            cid   TEXT NOT NULL,
+            term INTEGER NOT NULL,
+            cid TEXT NOT NULL,
             entry BLOB NOT NULL
         );
         CREATE UNIQUE INDEX IF NOT EXISTS log_unique_cid ON log(cid);
@@ -57,9 +57,8 @@ object SqlitePersistence:
     val createPersistTable: Fragment =
       sql"""
         CREATE TABLE IF NOT EXISTS persisted_state(
-            term      INTEGER PRIMARY KEY, 
-            voted_int TEXT,
-            voted_ext TEXT
+            term INTEGER PRIMARY KEY, 
+            vote TEXT
         );
       """
 
@@ -84,18 +83,12 @@ object SqlitePersistence:
       persistentState: PersistedState[F] = new:
         def persist(term: Term, vote: Option[NodeId]): F[Unit] =
           sql"""
-          INSERT INTO persisted_state VALUES (${PersistedRow(term, vote)}) 
-          ON CONFLICT (term) DO UPDATE
-          SET voted_int = excluded.voted_int,
-              voted_ext = excluded.voted_ext;
+          INSERT INTO persisted_state(term,vote) VALUES (${PersistedRow(term, vote)}) 
+          ON CONFLICT (term) DO UPDATE SET vote = excluded.vote;
           """.update.run.transact(xa).void
 
         def readLatest: F[Option[(Term, Option[NodeId])]] =
-          sql"""
-             SELECT term, voted_int, voted_ext
-             FROM persisted_state
-             ORDER BY term DESC LIMIT 1
-          """
+          sql"SELECT term, vote FROM persisted_state ORDER BY term DESC LIMIT 1"
             .query[(Term, Option[NodeId])]
             .option
             .transact(xa)

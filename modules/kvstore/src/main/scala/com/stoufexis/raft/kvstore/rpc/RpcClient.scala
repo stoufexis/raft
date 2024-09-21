@@ -24,7 +24,7 @@ object RpcClient:
     new:
       val id: NodeId = nodeId
 
-      val uri: Uri = nodeId.toUriInternal
+      val uri: Uri = nodeId.toUri
 
       val retryingClient: Client[F] =
         Retry(RetryPolicy(_ => Some(retryAfter)))(client)

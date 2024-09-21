@@ -3,56 +3,84 @@ services:
     image: "kvstore:0.1.0-SNAPSHOT"
     volumes:
       - node1-data:/var/opt/sqlite
-    ports:
-      - "8081:80"
     environment:
       SQLITE_DB_PATH: "/var/opt/sqlite/key.db"
       SQLITE_FETCH_SIZE: 100
-      CLIENT_PORT: 80
-      RAFT_PORT: 81
-      CURRENT_NODE_INTERNAL: "node1:81"
-      CURRENT_NODE_EXTERNAL: "localhost:8081"
-      OTHER_NODE_INTERNAL.0: "node2:81"
-      OTHER_NODE_EXTERNAL.0: "localhost:8082"
-      OTHER_NODE_INTERNAL.1: "node3:81"
-      OTHER_NODE_EXTERNAL.1: "localhost:8083"
+      HTTP_PORT: 80
+      CURRENT_NODE: node1
+      OTHER_NODES: node2,node3
 
   node2:
     image: "kvstore:0.1.0-SNAPSHOT"
     volumes:
       - node2-data:/var/opt/sqlite
-    ports:
-      - "8082:80"
     environment:
       SQLITE_DB_PATH: "/var/opt/sqlite/key.db"
       SQLITE_FETCH_SIZE: 100
-      CLIENT_PORT: 80
-      RAFT_PORT: 81
-      CURRENT_NODE_INTERNAL: "node2:81"
-      CURRENT_NODE_EXTERNAL: "localhost:8082"
-      OTHER_NODE_INTERNAL.0: "node1:81"
-      OTHER_NODE_EXTERNAL.0: "localhost:8081"
-      OTHER_NODE_INTERNAL.1: "node3:81"
-      OTHER_NODE_EXTERNAL.1: "localhost:8083"
+      HTTP_PORT: 80
+      CURRENT_NODE: node2
+      OTHER_NODES: node1,node3
 
   node3:
     image: "kvstore:0.1.0-SNAPSHOT"
     volumes:
       - node3-data:/var/opt/sqlite
-    ports:
-      - "8083:80"
     environment:
       SQLITE_DB_PATH: "/var/opt/sqlite/key.db"
       SQLITE_FETCH_SIZE: 100
-      CLIENT_PORT: 80
-      RAFT_PORT: 81
-      CURRENT_NODE_INTERNAL: "node3:81"
-      CURRENT_NODE_EXTERNAL: "localhost:8083"
-      OTHER_NODE_INTERNAL.0: "node1:81"
-      OTHER_NODE_EXTERNAL.0: "localhost:8081"
-      OTHER_NODE_INTERNAL.1: "node2:81"
-      OTHER_NODE_EXTERNAL.1: "localhost:8082"
+      HTTP_PORT: 80
+      CURRENT_NODE: node3
+      OTHER_NODES: node1,node2
 
+  proxy:
+    image: nginx
+    ports:
+      - "8080:80"
+    environment:
+      - NGINX_PORT=80
+    configs:
+      - source: default.conf
+        target: /etc/nginx/conf.d/default.conf
+
+configs:
+  default.conf:
+    content: |
+      upstream backend {
+        server node1:80;
+        server node2:80;
+        server node3:80;
+      }
+
+      server {
+        listen 80;
+
+        include /etc/nginx/mime.types;
+
+        proxy_redirect //node1:80/ http://localhost:8080/1/;
+        proxy_redirect //node2:80/ http://localhost:8080/2/;
+        proxy_redirect //node3:80/ http://localhost:8080/3/;
+
+        location / {
+          proxy_pass http://backend/;
+        }
+        location /1/ {
+          proxy_pass http://node1:80/;
+        }
+        location /2/ {
+          proxy_pass http://node2:80/;
+        }
+        location /3/ {
+          proxy_pass http://node3:80/;
+        }
+        location ~ /(1|2|3)/raft {
+          deny all;
+          return 403;
+        }
+        location ~ /raft {
+          deny all;
+          return 403;
+        }
+      }
 
 volumes:
   node1-data:

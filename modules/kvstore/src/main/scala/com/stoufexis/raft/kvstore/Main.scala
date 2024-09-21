@@ -48,27 +48,14 @@ object Main extends IOApp.Simple:
     val routes: Routes[IO] =
       Routes[IO](rn)
 
-    val clientFacing: IO[Nothing] =
-      EmberServerBuilder
-        .default[IO]
-        .withHost(ipv4"0.0.0.0")
-        .withPort(cfg.clientPort)
-        .withHttp2
-        .withHttpApp(routes.clientRoutes.orNotFound)
-        .build
-        .use(_ => IO.never)
-
-    val internal: IO[Nothing] =
-      EmberServerBuilder
-        .default[IO]
-        .withHost(ipv4"0.0.0.0")
-        .withPort(cfg.raftPort)
-        .withHttp2
-        .withHttpApp(routes.raftRoutes.orNotFound)
-        .build
-        .use(_ => IO.never)
-
-    IO.race(clientFacing, internal) >> IO.never
+    EmberServerBuilder
+      .default[IO]
+      .withHost(ipv4"0.0.0.0")
+      .withPort(cfg.httpPort)
+      .withHttp2
+      .withHttpApp((routes.clientRoutes <+> routes.raftRoutes).orNotFound)
+      .build
+      .use(_ => IO.never)
 
   def run: IO[Unit] =
     for
