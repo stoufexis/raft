@@ -20,6 +20,7 @@ This project aimed to build a basic raft system which could be extended in the f
 | Dynamic cluster membership changes | :x: |
 | Log compaction | :x: |
 | Redirecting to leader | :white_check_mark: |
+| Leader self demotion on partition | :white_check_mark: |
 | Linearizable semantics | :white_check_mark: * |
 
 \* Linearizability was implemented in a simpler way than how it is described in Diego's dissertation.
