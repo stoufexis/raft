@@ -33,9 +33,9 @@ The implemented features coincide with chapters 3 (except 3.10) and 6 of Diego's
 The replicated key-value store implementation aims to be extremely simple and easy to reason about; a lot of design choices were made in favor of simplicity and ease of demonstration instead of performance. Sqlite is used for persistence and http is used for rpc. Clients are served via http as well.
 
 Three commands are supported:
-* Get: recovers the value of a set of keys
+* Get: recovers the values of a set of keys
 * Update: sets the values of a set of keys
-* TransactionUpdate: sets the value of a set of keys, as long as a set of reference keys have not changed in value since a previous Get. If the reference keys have changed the client is prompted to retry. This effectively implements optimistic locking and thus serves as a simple transaction mechanism.
+* TransactionUpdate: sets the values of a set of keys, as long as a set of reference keys have not changed in value since a previous Get. If the reference keys have changed the client is prompted to retry. This effectively implements optimistic locking and thus serves as a simple transaction mechanism.
 
 A docker image of a key-value store node can be built via `sbt> kvstore / Docker / publishLocal` and a docker compose configuration is provided for setting up a cluster of 3 nodes, along with an nginx proxy.
 
