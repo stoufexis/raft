@@ -1,7 +1,6 @@
 package com.stoufexis.raft.kvstore
 
 import cats.effect.*
-import cats.implicits.given
 import com.comcast.ip4s.*
 import org.http4s.ember.client.EmberClientBuilder
 import org.http4s.ember.server.EmberServerBuilder
@@ -10,8 +9,7 @@ import org.typelevel.log4cats.slf4j.Slf4jLogger
 
 import com.stoufexis.raft.RaftNode
 import com.stoufexis.raft.kvstore.persist.SqlitePersistence
-import com.stoufexis.raft.kvstore.rpc.Routes
-import com.stoufexis.raft.kvstore.rpc.RpcClient
+import com.stoufexis.raft.kvstore.rpc.*
 import com.stoufexis.raft.kvstore.statemachine.*
 
 object Main extends IOApp.Simple:
@@ -30,8 +28,10 @@ object Main extends IOApp.Simple:
         )
 
       clients <-
-        cfg.otherNodes.traverse: n =>
-          EmberClientBuilder.default[IO].build.map(RpcClient(n, cfg.clientRetryAfter, _))
+        EmberClientBuilder
+          .default[IO]
+          .build
+          .map(cl => cfg.otherNodes.map(RpcClient(_, cfg.clientRetryAfter, cl)))
 
       rn <-
         RaftNode
