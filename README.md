@@ -1,7 +1,7 @@
 # raft
 
 This repository contains a generic implementation of the [raft consensus algorithm](https://raft.github.io/),
-along with an application of this implementation in a simple distributed, replicated key-value store.
+along with an application of this implementation in a distributed, replicated key-value store.
 
 Raft was implemented using cats-effect 3 and fs2. [Diego Ongaro's PhD dissertation](https://github.com/ongardie/dissertation) was used as the main reference.
 
@@ -34,8 +34,8 @@ The replicated key-value store implementation aims to be extremely simple and ea
 
 Three commands are supported:
 * Get: recovers the value of a set of keys
-* Update: sets the value of one or more keys
-* TransactionUpdate: sets the value of one or more keys, as long as a set of reference keys have not changed in value since a previous Get. If the reference keys have changed the client is prompted to retry. This effectively implements optimistic locking and thus serves as a simple transaction mechanism.
+* Update: sets the values of a set of keys
+* TransactionUpdate: sets the value of a set of keys, as long as a set of reference keys have not changed in value since a previous Get. If the reference keys have changed the client is prompted to retry. This effectively implements optimistic locking and thus serves as a simple transaction mechanism.
 
 A docker image of a key-value store node can be built via `sbt> kvstore / Docker / publishLocal` and a docker compose configuration is provided for setting up a cluster of 3 nodes, along with an nginx proxy.
 
