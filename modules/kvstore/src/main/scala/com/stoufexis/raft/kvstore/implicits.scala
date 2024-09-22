@@ -5,6 +5,7 @@ import cats.data.*
 import cats.effect.*
 import doobie.util.{Get, Put}
 import io.circe.*
+import io.circe.syntax.*
 import org.http4s.{ParseFailure, QueryParamDecoder, QueryParameterValue, EntityDecoder, EntityEncoder}
 import org.http4s.circe.*
 import scodec.bits.BitVector
@@ -34,6 +35,9 @@ object implicits:
   given Put[NodeId]   = NodeId.deriveContravariant
   given Get[NodeId]   = NodeId.deriveFunctor
   given Codec[NodeId] = Codec.from(NodeId.deriveFunctor, NodeId.deriveContravariant)
+
+  given Put[Json]   = Put[String].contramap(_.printWith(Printer.noSpaces))
+  given Get[Json]   = Get[String].temap(parser.parse(_).left.map(_.message))
 
   given [A: Codec]: Codec[Command[A]] = Codec.derived
 

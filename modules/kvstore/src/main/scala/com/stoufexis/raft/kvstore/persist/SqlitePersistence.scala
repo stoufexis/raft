@@ -1,5 +1,7 @@
 package com.stoufexis.raft.kvstore.persist
 
+import _root_.io.circe.*
+import _root_.io.circe.syntax.*
 import cats.MonadThrow
 import cats.data.NonEmptySeq
 import cats.effect.kernel.*
@@ -12,9 +14,6 @@ import doobie.util.*
 import doobie.util.fragment.Fragment
 import fs2.*
 import org.typelevel.log4cats.Logger
-import scodec.Attempt.*
-import scodec.Codec
-import scodec.bits.BitVector
 
 import com.stoufexis.raft.kvstore.implicits.given
 import com.stoufexis.raft.model.*
@@ -30,26 +29,24 @@ object SqlitePersistence:
 
     case object EncodingFailure extends RuntimeException("Encoding failure")
 
-    case class LogRow(term: Term, cid: CommandId, entry: Array[Byte]):
+    case class LogRow(term: Term, cid: CommandId, entry: Json):
       def getCommand[G[_]](using G: MonadThrow[G]): G[Command[A]] =
-        Codec[A].decode(BitVector(entry)) match
-          case Successful(a)  => G.pure(Command(cid, a.value))
-          case Failure(cause) => G.raiseError(IllegalStateException(s"Corrupted log: $cause"))
+        Codec[A].decodeJson(entry) match
+          case Left(err) => G.raiseError(err)
+          case Right(a)  => G.pure(Command(cid, a))
 
     object LogRow:
-      def fromCommand[G[_]](term: Term, command: Command[A])(using G: MonadThrow[G]): G[LogRow] =
-        Codec[A].encode(command.value) match
-          case Successful(value) => G.pure(LogRow(term, command.id, value.toByteArray))
-          case Failure(cause)    => G.raiseError(RuntimeException(s"Encoding failure: $cause"))
+      def fromCommand(term: Term, command: Command[A]): LogRow =
+        LogRow(term, command.id, command.value.asJson)
 
     case class PersistedRow(term: Term, vote: Option[NodeId])
 
     val createLogTable: Fragment =
       sql"""
         CREATE TABLE IF NOT EXISTS log(
-            term INTEGER NOT NULL,
-            cid TEXT NOT NULL,
-            entry BLOB NOT NULL
+            term  INTEGER NOT NULL,
+            cid   TEXT NOT NULL,
+            entry TEXT NOT NULL
         );
         CREATE UNIQUE INDEX IF NOT EXISTS log_unique_cid ON log(cid);
       """
@@ -101,10 +98,11 @@ object SqlitePersistence:
           val maxRowId: ConnectionIO[Index] =
             sql"SELECT max(rowid) FROM log".query[Index].unique
 
-          val rows: ConnectionIO[NonEmptySeq[LogRow]] =
-            entries.traverse(LogRow.fromCommand(term, _))
+          val rows: NonEmptySeq[LogRow] =
+            entries.map(LogRow.fromCommand(term, _))
 
-          rows.flatMap(Update[LogRow](insertSql).updateMany(_))
+          Update[LogRow](insertSql)
+            .updateMany(rows)
             .flatMap(_ => maxRowId)
             .transact(xa)
 

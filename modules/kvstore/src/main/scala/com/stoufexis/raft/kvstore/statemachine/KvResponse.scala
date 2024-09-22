@@ -15,4 +15,4 @@ object KvResponse:
       Json.obj("status" -> "SUCCESS".asJson)
 
     case KvResponse.Values(rid, vs) =>
-      Json.obj("status" -> "VALUES".asJson, "values" -> vs.asJson)
+      Json.obj("status" -> "VALUES".asJson, "revision_id" -> rid.asJson, "values" -> vs.asJson)
