@@ -5,7 +5,6 @@ import cats.data.*
 import cats.effect.*
 import doobie.util.{Get, Put}
 import io.circe.*
-import io.circe.syntax.*
 import org.http4s.{ParseFailure, QueryParamDecoder, QueryParameterValue, EntityDecoder, EntityEncoder}
 import org.http4s.circe.*
 import scodec.bits.BitVector

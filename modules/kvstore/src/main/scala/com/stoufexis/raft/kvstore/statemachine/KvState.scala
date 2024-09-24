@@ -4,12 +4,16 @@ import cats.implicits.given
 
 import com.stoufexis.raft.typeclass.Empty
 
-case class KvState(map: Map[String, (String, Long)]) derives Empty:
-  def setAll(sets: Map[String, Option[String]]): KvState = KvState:
-    sets.foldLeft(map): (acc, set) =>
-      acc.updatedWith(set._1):
-        case Some((_, r)) => set._2.map((_, r + 1))
-        case None         => set._2.map((_, 0))
+case class KvState(map: Map[String, (String, Long)], revision: Long) derives Empty:
+  def setAll(sets: Map[String, Option[String]]): KvState =
+    val newr: Long = revision + 1
+
+    val vals: Map[String, (String, Long)] =
+      sets.foldLeft(map): 
+        case (acc, (k, v)) =>
+          acc.updatedWith(k)(_ => v.tupleRight(newr))
+    
+    KvState(vals, newr)
 
   def revisionMatches(rid: RevisionId): Boolean =
     rid.revisions.forall((k, r) => map.get(k).exists(_._2 == r))
