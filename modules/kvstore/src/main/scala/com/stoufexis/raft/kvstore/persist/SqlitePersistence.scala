@@ -20,8 +20,6 @@ import com.stoufexis.raft.model.*
 import com.stoufexis.raft.persist.*
 
 object SqlitePersistence:
-  /** Uses a single connection since there is no concurrent use.
-    */
   def apply[F[_], A: Codec](dbPath: String, poolSize: Int, fetchSize: Int)(using
     F:      Async[F],
     logger: Logger[F]
