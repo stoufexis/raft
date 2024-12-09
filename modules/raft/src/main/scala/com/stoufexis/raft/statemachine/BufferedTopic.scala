@@ -11,8 +11,9 @@ trait BufferedPublisher[F[_], A]:
   def publishOrThrow(a: A): F[Unit]
 
 trait BufferedTopic[F[_], A] extends BufferedPublisher[F, A]:
+  // TODO: remove from BufferedTopic its inheritted from BufferedPublisher
   def publish(a: A): F[Boolean]
-
+  // TODO: remove from BufferedTopic its inheritted from BufferedPublisher
   def publishOrThrow(a: A): F[Unit]
 
   def newSubscriber: Resource[F, Stream[F, A]]
