@@ -65,6 +65,13 @@ object SqlitePersistence:
       config.setMaximumPoolSize(poolSize)
       config
 
+    /**
+     * For anyone looking into this not familiar with doobie; keep in mind that even though some queries look like
+     * they are using direct sql interpolation, that is not the case. Doobie translates strings using the sql interpolation
+     * syntax to jdbc PreparedStatements and sets all parameters using the proper `set` methods.
+     *
+     * For further reading, see https://typelevel.org/doobie/docs/05-Parameterized.html
+     */
     for
       xa: HikariTransactor[F] <-
         HikariTransactor.fromHikariConfig(hikariCfg)
