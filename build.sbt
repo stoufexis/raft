@@ -84,7 +84,7 @@ lazy val kvstore: Project =
       dockerCommands += Cmd("RUN", "mkdir", "/var/opt/sqlite"),
       dockerCommands += Cmd("RUN", "chown", (Docker / daemonUser).value, "/var/opt/sqlite"),
       // for easy inspection of the db in the container
-      dockerCommands += Cmd("RUN", "apt", "update", "&&", "apt", "install", "sqlite3"),
+      dockerCommands += Cmd("RUN", "apt-get", "--assume-yes", "update", "&&", "apt-get", "--assume-yes", "install", "sqlite3"),
       dockerCommands += Cmd("USER", (Docker / daemonUser).value)
     )
 
