@@ -23,8 +23,7 @@ object Main extends IOApp.Simple:
           // The leader uses the most connecitons.
           // At a maximum it can cocurrently use a connection for each node it appends to,
           // plus one connection for appending entries from clients
-          poolSize  = cfg.otherNodes.size + 1,
-          fetchSize = cfg.sqliteFetchSize
+          poolSize  = cfg.otherNodes.size + 1
         )
 
       clients <-

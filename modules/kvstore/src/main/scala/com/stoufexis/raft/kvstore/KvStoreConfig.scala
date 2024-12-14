@@ -15,7 +15,6 @@ case class KvStoreConfig(
   thisNode:            NodeId,
   otherNodes:          List[NodeId],
   sqliteDbPath:        String,
-  sqliteFetchSize:     Int,
   httpPort:            Port,
   electionTimeoutLow:  FiniteDuration,
   electionTimeoutHigh: FiniteDuration,
@@ -40,7 +39,6 @@ object KvStoreConfig:
     val cfg: F[KvStoreConfig] =
       for
         sqliteDbPath    <- getVar("KV_SQLITE_DB_PATH", _.some)
-        sqliteFetchSize <- getVar("KV_SQLITE_FETCH_SIZE", _.toIntOption)
         httpPort        <- getVar("KV_HTTP_PORT", _.toIntOption.flatMap(Port.fromInt))
         electionLow     <- getVar("KV_ELECTION_TIMEOUT_LOW_MS", _.toLongOption.map(_.millis))
         electionHigh    <- getVar("KV_ELECTION_TIMEOUT_HIGH_MS", _.toLongOption.map(_.millis))
@@ -52,7 +50,6 @@ object KvStoreConfig:
         thisNode            = thisNode,
         otherNodes          = otherNodes,
         sqliteDbPath        = sqliteDbPath,
-        sqliteFetchSize     = sqliteFetchSize,
         httpPort            = httpPort,
         electionTimeoutLow  = electionLow,
         electionTimeoutHigh = electionHigh,

@@ -20,7 +20,7 @@ import com.stoufexis.raft.model.*
 import com.stoufexis.raft.persist.*
 
 object SqlitePersistence:
-  def apply[F[_], A: Codec](dbPath: String, poolSize: Int, fetchSize: Int)(using
+  def apply[F[_], A: Codec](dbPath: String, poolSize: Int)(using
     F:      Async[F],
     logger: Logger[F]
   ): Resource[F, (Log[F, A], PersistedState[F])] =

@@ -5,7 +5,6 @@ x-common-env: &common-env
   KV_HEARTBEAT_EVERY_MS: 100
   KV_HTTP_PORT: 80
   KV_SQLITE_DB_PATH: "/var/opt/sqlite/key.db"
-  KV_SQLITE_FETCH_SIZE: 100
 
 services:
   node1:
