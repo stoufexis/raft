@@ -174,7 +174,7 @@ extension [F[_]](req: AppendEntries[?])(using F: MonadThrow[F], logger: Logger[F
       _ <- sink.complete_(AppendResponse.Accepted)
       _ <- F.pure(req.entries.isEmpty).ifM(
         logger.debug(s"Heartbeat accepted from ${req.leaderId}"),
-        logger.info(s"Append with prev index ${req.prevLogIndex} accepted from ${req.leaderId}")
+        logger.info(s"Append accepted from ${req.leaderId}")
       )
     yield ()
 
