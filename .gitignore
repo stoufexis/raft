@@ -32,3 +32,4 @@ metals.sbt
 /.worksheet/
 .db
 .sqlite
+*.jar
