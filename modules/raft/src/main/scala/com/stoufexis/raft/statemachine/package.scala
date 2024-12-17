@@ -41,7 +41,7 @@ extension [F[_], A](stream: Stream[F, A])
     */
   def dropping(buffer: Int)(using F: Concurrent[F]): Stream[F, A] =
     Stream
-      .eval(Queue.dropping[F, A](buffer) product Deferred[F, Unit])
+      .eval(Queue.circularBuffer[F, A](buffer) product Deferred[F, Unit])
       .flatMap: (q, d) =>
         val updater: Stream[F, Nothing] =
           stream
