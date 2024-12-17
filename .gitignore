@@ -33,3 +33,4 @@ metals.sbt
 .db
 .sqlite
 *.jar
+.scala-build
