@@ -148,7 +148,7 @@ object Leader:
         log
           .rangeStream(Index.uninitiated, initIdx)
           .fold(Empty[S].empty):
-            case (s, (_, c)) => automaton(s, c.value)._1
+            case (s, (_, _, c)) => automaton(s, c.value)._1
 
       // Assumes that matchIdxs for each node always increase
       commitIdx: Stream[F, Index] =
@@ -175,7 +175,7 @@ object Leader:
           case (acc @ (clients, s), Right(req)) =>
             val ifNotExists: F[(Queue[WaitingClient[F, Out, S]], S)] =
               log
-                .append(state.term, NonEmptySeq.of(req.entry))
+                .append(NonEmptySeq.of((state.term, req.entry)))
                 .flatTap(newIdxs.publish(_))
                 .map(i => (clients.enqueue(i, req.sink), s))
 
@@ -284,7 +284,7 @@ object Leader:
           else
             log.term(matchIdx)
 
-        val info: F[(Term, Seq[Command[In]])] =
+        val info: F[(Term, Seq[(Term, Command[In])])] =
           term.product:
             if seek
             then F.pure(Seq.empty)

@@ -116,7 +116,7 @@ object Follower:
                   val onMatches: F[Unit] =
                     req.accepted(sink)
                       >> log.deleteAfter(req.prevLogIndex)
-                      >> log.append(req.term, entries).void
+                      >> log.append(entries).void
 
                   val onNotMatches: F[Unit] =
                     req.inconsistent(sink)

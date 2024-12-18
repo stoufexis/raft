@@ -7,5 +7,5 @@ case class AppendEntries[In](
   term:         Term,
   prevLogIndex: Index,
   prevLogTerm:  Term,
-  entries:      Seq[Command[In]]
+  entries:      Seq[(Term, Command[In])]
 )

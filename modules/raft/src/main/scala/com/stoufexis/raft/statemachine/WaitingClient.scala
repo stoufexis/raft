@@ -35,7 +35,7 @@ object WaitingClient:
         Pull.output1(cl, s) >> Pull.done
 
       def go(
-        stream:  Stream[F, (Index, Command[In])],
+        stream:  Stream[F, (Index, Term, Command[In])],
         acc:     S,
         head:    WaitingClient[F, Out, S],
         clients: Queue[WaitingClient[F, Out, S]]
@@ -43,7 +43,7 @@ object WaitingClient:
         stream.pull.uncons1.flatMap:
           case None => done(clients, acc)
 
-          case Some(((index, e), tail)) =>
+          case Some(((index, _, e), tail)) =>
             val (newS, out) = automaton(acc, e.value)
 
             if index >= head.idx then

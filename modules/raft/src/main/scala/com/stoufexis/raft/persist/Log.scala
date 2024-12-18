@@ -7,7 +7,7 @@ import com.stoufexis.raft.model.*
 
 trait Log[F[_], In]:
   // Returns the new last index of the log
-  def append(term: Term, entries: NonEmptySeq[Command[In]]): F[Index]
+  def append(entries: NonEmptySeq[(Term, Command[In])]): F[Index]
 
   def commandIdExists(commandId: CommandId): F[Boolean]
 
@@ -17,9 +17,9 @@ trait Log[F[_], In]:
 
   /** Inclusive range
     */
-  def range(from: Index, until: Index): F[Seq[Command[In]]]
+  def range(from: Index, until: Index): F[Seq[(Term, Command[In])]]
 
-  def rangeStream(from: Index, until: Index): Stream[F, (Index, Command[In])]
+  def rangeStream(from: Index, until: Index): Stream[F, (Index, Term, Command[In])]
 
   def lastTermIndex: F[Option[(Term, Index)]]
 

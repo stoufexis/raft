@@ -96,7 +96,7 @@ object SqlitePersistence:
             .transact(xa)
 
       log: Log[F, A] = new:
-        def append(term: Term, entries: NonEmptySeq[Command[A]]): F[Index] =
+        def append(entries: NonEmptySeq[(Term, Command[A])]): F[Index] =
           val insertSql: String =
             "INSERT INTO log (term, cid, entry) VALUES (?, ?, ?)"
 
@@ -104,7 +104,7 @@ object SqlitePersistence:
             sql"SELECT max(rowid) FROM log".query[Index].unique
 
           val rows: NonEmptySeq[LogRow] =
-            entries.map(LogRow.fromCommand(term, _))
+            entries.map((t,c) => LogRow.fromCommand(t, c))
 
           Update[LogRow](insertSql)
             .updateMany(rows)
@@ -123,12 +123,12 @@ object SqlitePersistence:
           sql"SELECT term FROM log WHERE rowid = $index"
             .query[Term].unique.transact(xa)
 
-        def rangeStream(from: Index, until: Index): Stream[F, (Index, Command[A])] =
+        def rangeStream(from: Index, until: Index): Stream[F, (Index, Term, Command[A])] =
           sql"SELECT rowid, * FROM log WHERE rowid >= $from AND rowid <= $until"
             .query[(Index, LogRow)]
             .stream
             .transact(xa)
-            .evalMap((i, row) => row.getCommand.map((i, _)))
+            .evalMap((i, row) => row.getCommand.map((i, row.term, _)))
 
         def lastTermIndex: F[Option[(Term, Index)]] =
           sql"""
@@ -150,11 +150,11 @@ object SqlitePersistence:
             .map(_.getOrElse(false))
             .transact(xa)
 
-        def range(from: Index, until: Index): F[Seq[Command[A]]] =
+        def range(from: Index, until: Index): F[Seq[(Term, Command[A])]] =
           sql"SELECT * FROM log WHERE rowid >= $from AND rowid <= $until"
             .query[LogRow]
             .stream
-            .evalMap(_.getCommand[ConnectionIO])
+            .evalMap(r => r.getCommand[ConnectionIO].tupleLeft(r.term))
             .compile
             .toList
             .widen
