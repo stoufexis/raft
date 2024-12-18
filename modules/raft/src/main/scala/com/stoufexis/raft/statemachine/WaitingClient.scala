@@ -52,8 +52,8 @@ object WaitingClient:
 
               Pull.eval(head.sink.complete(ClientResponse.Executed(newS, out))) >>
                 nextClientsAcc.dequeueOption.match
-                  case Some((head, _)) => go(tail, newS, head, nextClientsAcc)
-                  case None            => done(clients, newS)
+                  case Some((newHead, _)) => go(tail, newS, newHead, nextClientsAcc)
+                  case None               => done(nextClientsAcc, newS)
             else
               go(tail, newS, head, clients)
 
