@@ -45,7 +45,7 @@ object Routes:
           Ok((output: KvResponse).asJson).map(_.withHeaders(currentLocation))
 
         case ClientResponse.Skipped(_) =>
-          NotModified().map(_.withHeaders(currentLocation))
+          Conflict().map(_.withHeaders(currentLocation))
 
         case ClientResponse.UnknownLeader() =>
           TemporaryRedirect().map(_.withHeaders(currentLocation))
