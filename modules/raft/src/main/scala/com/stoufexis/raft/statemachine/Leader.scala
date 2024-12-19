@@ -180,6 +180,7 @@ object Leader:
                 .map(i => (clients.enqueue(i, req.sink), s))
 
             val ifExists: F[(Queue[WaitingClient[F, Out, S]], S)] =
+              logger.warn(s"Skipping duplicate command with id ${req.entry.id}") >>
               req.sink.complete(ClientResponse.Skipped(s)) as acc
 
             log
