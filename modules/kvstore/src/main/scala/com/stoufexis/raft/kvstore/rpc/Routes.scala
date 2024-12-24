@@ -23,18 +23,22 @@ object Routes:
     object dsl extends Http4sDsl[F]
     import dsl.*
 
+    val cidParamName = "command_id"
+    val ridParamName = "revision_id"
+
     object GetKeys:
       def unapply(params: Map[String, collection.Seq[String]]): Option[Set[String]] =
-        params.get("keys").map(_.toSet)
+        params.removedAll(List(cidParamName, ridParamName)).get("keys").map(_.toSet)
 
     object UpdateKeys:
       def unapply(params: Map[String, collection.Seq[String]]): Option[Map[String, Option[String]]] =
         // I think .last is safe here
-        Some(params.fmap(_.last).fmap(Some(_).filter(_.nonEmpty))).filter(_.nonEmpty)
+        val params0 = params.removedAll(List(cidParamName, ridParamName))
+        Some(params0.fmap(_.last).fmap(Some(_).filter(_.nonEmpty))).filter(_.nonEmpty)
 
-    case object Cid extends QueryParamDecoderMatcher[CommandId]("command_id")
+    case object Cid extends QueryParamDecoderMatcher[CommandId](cidParamName)
 
-    case object Rid extends QueryParamDecoderMatcher[RevisionId]("revision_id")
+    case object Rid extends QueryParamDecoderMatcher[RevisionId](ridParamName)
 
     def foldResponse(req: Request[F], cr: ClientResponse[KvResponse, KvState]): F[Response[F]] =
       val currentLocation: Location =
