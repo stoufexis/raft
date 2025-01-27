@@ -5,7 +5,9 @@ along with an application of this implementation in a distributed, replicated ke
 
 Raft was implemented using cats-effect 3 and fs2. [Diego Ongaro's PhD dissertation](https://github.com/ongardie/dissertation) was used as the main reference.
 
-Note that currently this is still a WIP.
+## Thesis
+
+This project was part of my bachelor's thesis, which you can view at <https://stoufexis.github.io/raft/thesis/compiled.pdf>.
 
 ## Raft features implemented
 
@@ -39,6 +41,3 @@ Three commands are supported:
 * TransactionUpdate: sets the values of a set of keys, as long as a set of reference keys have not changed in value since a previous Get. If the reference keys have changed the client is prompted to retry. This effectively implements optimistic locking and thus serves as a simple transaction mechanism.
 
 A docker image of a key-value store node can be built via `sbt> kvstore / Docker / publishLocal` and a docker compose configuration is provided for setting up a cluster of 3 nodes, along with an nginx proxy.
-
-## The future
-This will most likely become my university thesis, in which case there will be an accompanying paper
