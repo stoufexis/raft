@@ -1,0 +1,252 @@
+@inbook{apt2009,
+  title="Distributed Programs",
+  bookTitle="Verification of Sequential and Concurrent Programs",
+  year="2009",
+  publisher="Springer London",
+  address="London",
+  pages="373--406",
+  abstract="Many Real Systems consist of a number of physically distributed components that work independently using their private storage, but also communicate from time to time by explicit message passing. Such systems are called distributed systems. Distributed programs are abstract descriptions of distributed systems. A distributed program consists of a collection of processes that work concurrently and communicate by explicit message passing. Each process can access a set of variables which are disjoint from the variables that can be changed by any other process.",
+  isbn="978-1-84882-745-5",
+  doi="10.1007/978-1-84882-745-5_11",
+  url="https://doi.org/10.1007/978-1-84882-745-5_11"
+}
+
+@book{van2017distributed,
+  title={Distributed systems},
+  author={Van Steen, Maarten and Tanenbaum, Andrew S},
+  year={2017},
+  publisher={Maarten van Steen Leiden, The Netherlands}
+}
+
+@phdthesis{raft,
+  author="Diego Andres Ongaro",
+  title="Consensus : bridging theory and practice",
+  url="https://purl.stanford.edu/qr033xr6097",
+  year={2014}
+}
+
+@phdthesis{ratis,
+  author="Apache Software Foundation",
+  title="Apache Ratis",
+  url="https://ratis.apache.org/",
+  year={2024}
+}
+
+@misc{scylla,
+  title="Why ScyllaDB?",
+  url="https://docs.scylladb.com/stable/get-started/why-scylladb/index.html",
+  note = {Accessed: 2024-12-04}
+}
+
+@misc{scylla-raft,
+  title="Raft Consensus Algorithm in ScyllaDB",
+  url="https://opensource.docs.scylladb.com/stable/architecture/raft.html",
+  note = {Accessed: 2024-12-04}
+}
+
+@misc{kafka,
+  title="Apache Kafka",
+  url="https://kafka.apache.org/",
+  note = {Accessed: 2024-12-04}
+}
+
+@misc{cockroach-db,
+  title="CockroachDB Docs",
+  url="https://www.cockroachlabs.com/docs/stable/",
+  note = {Accessed: 2024-12-21}
+}
+
+@misc{kip-500,
+  title="KIP-500: Replace ZooKeeper with a Self-Managed Metadata Quorum",
+  url="https://cwiki.apache.org/confluence/display/KAFKA/KIP-500%3A+Replace+ZooKeeper+with+a+Self-Managed+Metadata+Quorum",
+  year={2020}
+}
+
+@misc{kip-833,
+  title="KIP-833: Mark KRaft as Production Ready",
+  url="https://cwiki.apache.org/confluence/display/KAFKA/KIP-833%3A+Mark+KRaft+as+Production+Ready",
+  year={2024}
+}
+
+@misc{redis,
+  title="Introduction to Redis",
+  url="https://redis.io/about/",
+  note = {Accessed: 2024-12-04}
+}
+
+@article{logical-clocks,
+author = {Lamport, Leslie},
+title = {Time, clocks, and the ordering of events in a distributed system},
+year = {1978},
+issue_date = {July 1978},
+publisher = {Association for Computing Machinery},
+address = {New York, NY, USA},
+volume = {21},
+number = {7},
+issn = {0001-0782},
+url = {https://doi.org/10.1145/359545.359563},
+doi = {10.1145/359545.359563},
+abstract = {The concept of one event happening before another in a distributed system is examined, and is shown to define a partial ordering of the events. A distributed algorithm is given for synchronizing a system of logical clocks which can be used to totally order the events. The use of the total ordering is illustrated with a method for solving synchronization problems. The algorithm is then specialized for synchronizing physical clocks, and a bound is derived on how far out of synchrony the clocks can become.},
+journal = {Commun. ACM},
+month = jul,
+pages = {558–565},
+numpages = {8},
+keywords = {clock synchronization, computer networks, distributed systems, multiprocess systems}
+}
+
+@misc{cockroachDb-multi-raft,
+  title = "Scaling Raft",
+  url="https://www.cockroachlabs.com/blog/scaling-raft/",
+  note = {Accessed: 2024-12-06}
+}
+
+@article{solat2024sharding,
+  title={Sharding distributed databases: A critical review},
+  author={Solat, Siamak},
+  journal={arXiv preprint arXiv:2404.04384},
+  year={2024}
+}
+
+@article{copeland2016tangaroa,
+  title={Tangaroa: a byzantine fault tolerant raft},
+  author={Copeland, Christopher and Zhong, Hongxia},
+  journal={Stanford University},
+  year={2016}
+}
+
+@inproceedings{tian2021byzantine,
+  title={A byzantine fault-tolerant raft algorithm combined with Schnorr signature},
+  author={Tian, Sihan and Liu, Yun and Zhang, Yansong and Zhao, Yingsi},
+  booktitle={2021 15th International Conference on Ubiquitous Information Management and Communication (IMCOM)},
+  pages={1--5},
+  year={2021},
+  organization={IEEE}
+}
+
+@inproceedings{zhou2021vg,
+  title={Vg-raft: An improved byzantine fault tolerant algorithm based on raft algorithm},
+  author={Zhou, Shumeng and Ying, Bidi},
+  booktitle={2021 IEEE 21st International Conference on Communication Technology (ICCT)},
+  pages={882--886},
+  year={2021},
+  organization={IEEE}
+}
+
+@inproceedings{xie2022raft,
+  title={A raft algorithm with byzantine fault-tolerant performance},
+  author={Xie, Ting and Liu, Xiaofeng},
+  booktitle={Proceedings of the 5th International Conference on Information Science and Systems},
+  pages={95--99},
+  year={2022}
+}
+
+@misc{aws-kv-stores,
+  title = "What Is a Key-Value Database?",
+  url="https://aws.amazon.com/nosql/key-value/",
+  note = {Accessed: 2024-12-08}
+}
+
+@misc{consul-kv-stores,
+  title = "Key/Value (KV) Store Overview",
+  url="https://developer.hashicorp.com/consul/docs/dynamic-app-config/kv",
+  note = {Accessed: 2024-12-08}
+}
+
+@article{kung1981optimistic,
+  title={On optimistic methods for concurrency control},
+  author={Kung, Hsiang-Tsung and Robinson, John T},
+  journal={ACM Transactions on Database Systems (TODS)},
+  volume={6},
+  number={2},
+  pages={213--226},
+  year={1981},
+  publisher={ACM New York, NY, USA}
+}
+
+@misc{spotify,
+  title = "Big Data Processing at Spotify: The Road to Scio (Part 1)",
+  url = "https://engineering.atspotify.com/2017/10/big-data-processing-at-spotify-the-road-to-scio-part-1/#:~:text=Scala%20is%20the%20preferred%20programming,balance%20between%20productivity%20and%20performance.",
+  note = {Accessed: 2024-12-08}
+}
+
+@misc{x-twitter,
+  title = "How Twitter leverages Scala Programming for its massive platform!",
+  url = "https://www.linkedin.com/pulse/how-twitter-leverages-scala-programming-its-massive-platform-kumari-wkmxc/",
+  note = {Accessed: 2024-12-08}
+}
+
+@misc{disney-streaming,
+  title = "Disney Streaming",
+  url = "https://press.disneyplus.com/",
+  note = {Accessed: 2024-12-08}
+}
+
+@misc{lichess,
+  title = "lichess.org: the forever free, adless and open source chess server",
+  url = "https://github.com/lichess-org/lila",
+  note = {Accessed: 2024-12-08}
+}
+
+@misc{netflix,
+  title = "Why Netflix Loves Scala for Machine Learning",
+  url = "https://www.classcentral.com/course/youtube-why-netflix-s-scala-for-machine-learning-jeremy-smith-aish-236118",
+  note = {Accessed: 2024-12-08}
+}
+
+@misc{spark,
+  title = "Apache Spark - A unified analytics engine for large-scale data processing",
+  url = "https://github.com/apache/spark",
+  note = {Accessed: 2024-12-08}
+}
+
+@book{pure-fp-scala,
+    author = {Paul Chiusano, Runar Bjarnason},
+    title = "Functional Programming in Scala",
+    publisher = "Manning Publications",
+    year = {2014}
+}
+
+@misc{sqlite-most-used,
+  title="Most Widely Deployed and Used Database Engine",
+  url = "https://www.sqlite.org/mostdeployed.html",
+  note = {Accessed: 2024-12-08}
+}
+
+@misc{get-and-update,
+  title="AtomicReference (Java Platform SE 8)",
+  url = "https://docs.oracle.com/javase/8/docs/api/java/util/concurrent/atomic/AtomicReference.html#getAndUpdate-java.util.function.UnaryOperator-",
+  note = {Accessed: 2024-12-08}
+}
+
+@misc{stoufexis-raft,
+    title="Key-value store using Raft source code",
+    url="https://github.com/stoufexis/raft",
+    author={Stefanos Toufexis}
+}
+
+@inproceedings{wadler1989make,
+  title={How to make ad-hoc polymorphism less ad hoc},
+  author={Wadler, Philip and Blott, Stephen},
+  booktitle={Proceedings of the 16th ACM SIGPLAN-SIGACT symposium on Principles of programming languages},
+  pages={60--76},
+  year={1989}
+}
+
+@article{freeman2015stack,
+  title={Stack safety for free},
+  author={Freeman, Phil},
+  journal={URL: http://functorial. com/stack-safety-for-free/index. pdf},
+  year={2015}
+}
+
+@misc{sqlite-rowid,
+  title="ROWIDs and the INTEGER PRIMARY KEY",
+  url = "https://www.sqlite.org/lang_createtable.html#rowid",
+  note = {Accessed: 2024-12-12}
+}
+
+@misc{409-status-code,
+  title="409 Conflict",
+  url = "https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/409",
+  note = {Accessed: 2025-01-05}
+}

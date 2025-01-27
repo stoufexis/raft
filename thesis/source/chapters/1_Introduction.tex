@@ -1,0 +1,107 @@
+\chapter{Introduction}
+
+\section{What is a Distributed System}
+A distributed system is any system consisting of multiple independent components, which coordinate to achieve a common function. Each of the components in a distributed system may have its own private storage and communicate with the rest through message passing \cite{apt2009}.\\
+
+Most modern software, due to either its internal requirements or its need to interact with external systems, is in some way part of a distributed system. While they have immense utility, distributed systems also carry a unique set of challenges to be overcome. It is therefore no surprise that there is a vast and continually growing body of research in distributed computing.
+
+\section{Characteristics of Distributed Systems}
+
+Three particularly important characteristics of modern distributed systems are scalability, fault tolerance, and consistency. While they are all important, attempting to maximize them simultaneously within a single system can be challenging or even technically impossible, as they lead to conflicting design choices. Successful distributed systems often provide a compromise between these that is appealing in real-world applications.
+
+\subsection{Scalability}
+
+In discussions regarding high-performance systems, scalability typically refers to the ability of a system to utilize more resources in order to meet higher demands. Scalability is often categorized into two types: vertical and horizontal.
+
+\subsubsection{Vertical Scalability}
+
+Vertical scalability, sometimes called scaling up, refers to the ability of a system running on a single machine to receive and utilize additional computational resources on demand, such as more powerful CPUs or more memory. Vertical scalability does not require a distributed design since the resources are centralized in a single machine. While vertical scalability can theoretically fulfill any performance requirements, it is often not enough for modern real-world systems. After a certain size, additional resources can become increasingly costly and provide diminishing returns. Such systems are also susceptible to catastrophic events that completely interrupt their services, such as hardware failures or power outages, since they usually contain single points of failure.
+
+\subsubsection{Horizontal Scalability}
+
+Horizontal scalability, sometimes called scaling out, refers to the ability of a system to utilize the resources of additional machines on demand. This is the kind of scalability that distributed system design is concerned with. Usually, a horizontally scalable system can efficiently utilize more computational resources than its vertically scalable counterpart and can do so without significant diminishing returns. Such a system can also be less susceptible to complete interruptions and can usually continue providing its services even if some of the machines involved have catastrophically failed. However, since the system gets divided into multiple, relatively independent parts, it becomes more difficult to spread information across it. This introduces two core concepts in distributed system design: fault tolerance and consistency.
+
+\subsection{Fault Tolerance}
+
+Fault tolerance refers to the ability of a distributed system to continue functioning correctly when faced with failures in parts of the system \cite{van2017distributed}. A distributed system is inherently fault-tolerant to a degree, since failures usually affect only a fraction of the system, as it is spread across multiple machines. The degree of fault tolerance can be further enhanced by taking advantage of different availability zones, allowing a system to be distributed across areas with independent power, networking infrastructure, and possibly weather. This allows for continuous operation under most major infrastructure failures, as these are most often isolated in a single availability zone.
+
+\subsection{Consistency}
+
+A distributed system often hosts information that needs to be known by every component of the system in order to make progress or function correctly. At the same time, this information may change over time as a response to external input, such as in the case of dynamic configuration parameters. A distributed system may also require data to be shared across components to become fault tolerant. This is required by systems like distributed databases operating in a cluster, which are often expected to return complete and correct information as a response to a query, even if some of the cluster members have failed. Both of these cases clearly show the requirement for some level of information synchronization across a distributed system, which is referred to as consistency.\\
+
+Consistency often comes at the cost of scalability, as the cost of synchronizing information increases with the number of components involved. Fault tolerance can also suffer, since the mechanism for achieving and maintaining consistency may require the majority, or the entirety of the system, to be operational most, or all of the time.\\
+
+\section{Consensus Mechanisms in Distributed Systems}
+
+Achieving consistency while still providing appealing degrees of scalability and fault tolerance is a major design problem which has sparked the development of consensus mechanisms. Consensus mechanisms effectively spread and synchronize the required information across the distributed system, while allowing for enough scalability and fault tolerance to be useful in real-world applications.
+
+\subsection{Replicated State Machines}
+
+Consensus mechanisms typically use a fundamental building block, the replicated state machine, to synchronize information within groups of servers.\\
+
+State machines begin with an initial state and evolve in response to external commands. Each application of a command, called a transition, results in the state machine being in a new state, which can then further transition in response to new commands. Replicating such a state machine means installing the same transition logic with the same initial state in a group of servers and broadcasting the same sequence of commands to them, resulting in an identical final state between them. This group can then make progress even in the presence of failures in some of the servers.\\
+
+\subsection{Paxos}
+
+Historically, the Paxos family of algorithms have been the go-to systems for implementing such replicated state machines. Paxos solves the problem of consensus by introducing a formal system for servers proposing values and other servers accepting and learning those values, thus reaching consensus. However, in order for Paxos to be used for implementing replicated state machines, it must be extended to handle an ordered series of proposed and accepted values. Such a version of Paxos is called Multi-Paxos.\\
+
+Although Paxos has been a useful basis for consensus, significant drawbacks have been observed. The authors of Raft state that "Paxos is exceptionally difficult to understand. The complete explanation is notoriously opaque; few people succeed in understanding it and only with great effort" \cite{raft}. Additionally, they note that Paxos "does not provide a good foundation for building practical implementations. One reason is that there is no widely agreed-upon algorithm for Multi-Paxos" \cite{raft}. \\
+
+The lack of an authoritative description of Multi-Paxos presents a real problem for practical application. Each implementer has to come up with an unproven protocol, resembling Paxos, that will meet the demands of their particular system. This process can be both cumbersome and error-prone.
+
+\subsection{Raft}
+
+Raft was proposed in 2014 \cite{raft} as a complete alternative to Multi-Paxos, improving on its shortcomings. Raft aims to be the backbone for modern systems in need of a consensus mechanism. It provides a complete solution that is safe, is efficient for common operations, is understandable, and results in systems that are available under most operating conditions \cite{raft}. Most importantly, Raft comes with an authoritative specification, so implementers are not left to their own devices and can avoid the pitfalls of custom, ad-hoc, non-proven implementations.\\
+
+Since its inception, Raft has been used to enable coordination in multiple large-scale projects, including distributed databases, message brokers, and distributed configuration stores. Moreover, efforts have been made to create reusable Raft components that can be included in other projects as libraries \cite{ratis}.
+
+\section{Distributed Databases with Raft}
+
+Distributed databases are groups of servers which collaboratively host a structured set of data. Parts of the data can be present in one, many, or all servers in the group, while metadata like the schema definition and topology configuration typically need to be present in all of them. Sharing data between nodes requires an efficient replication mechanism with guarantees about data integrity, availability, and consistency. \\
+
+To support efficient operations on the replicated data, a server is usually designated as the leader for parts, or even all of the data, and becomes responsible for validating and executing all of the incoming requests. This process is called leader election.\\
+
+These requirements call for a consensus mechanism and Raft has stood out as a go-to solution, since it can effectively implement replication and leader election out of the box, while providing guarantees about its safety and efficiency.
+
+\section{Real-World Systems using Raft}
+
+Today, Raft can be seen in action in several widely used distributed systems. Three particularly interesting examples are ScyllaDB, Apache Kafka, and CockroachDB.
+
+\subsection{ScyllaDB}
+
+According to its official website, "ScyllaDB is a high-performance, open-source NoSQL database optimized for speed and scalability. It is designed to efficiently handle large volumes of data with minimal latency, making it ideal for data-intensive applications"\cite{scylla}.\\
+
+ScyllaDB uses Raft internally to manage its schema, as well as topology changes in the cluster. Originally, a version of Paxos was used along with a gossip protocol, but it was eventually dropped in favor of Raft to achieve stronger consistency \cite{scylla-raft}.\\
+
+According to its documentation \cite{scylla-raft}, using Raft for managing the schema has enabled ScyllaDB to avoid conflicts in cases of concurrent conflicting updates, but even in erroneous states like split-brains. When a number of conflicting schema updates are issued at the same time, against the same or different servers in the cluster, ScyllaDB guarantees that the latest one will be applied and then will become visible externally. This is a direct consequence of using Raft's leader election and replication mechanisms for applying and disseminating such updates and is formally guaranteed by the algorithm. Split-brain states and how Raft solves them is explained in Chapter 2.\\
+
+Similarly to schema updates, Raft enables ScyllaDB to also handle topology changes efficiently and safely. Operations like adding new servers in a ScyllaDB cluster concurrently were only made possible after switching to Raft.
+
+\subsection{Apache Kafka}
+
+According to its official website, "Apache Kafka is an open-source distributed event streaming platform used by thousands of companies for high-performance data pipelines, streaming analytics, data integration, and mission-critical applications"\cite{kafka}.\\
+
+Apache Kafka, according to KIP-500 \cite{kip-500}, has historically depended on an external tool for consensus, Apache Zookeeper, which managed metadata regarding many of Kafka's core functions. This meant that for every deployment of a Kafka cluster, a ZooKeeper cluster would also need to be deployed and managed separately. In addition to ZooKeeper being an additional operating burden, it has also been a performance bottleneck and has led to erroneous states in Kafka clusters, as they need to constantly synchronize their metadata with the ZooKeeper cluster\cite{kip-500}.\\
+
+To address these issues, KIP-500 proposed a consensus mechanism internal to Kafka, which would replace the dependency to ZooKeeper; improving performance, reducing the probability of erroneous states, and simplifying deployment. This mechanism has used Raft as a basis and is usually called KRaft.\\
+
+Kafka's usage of Raft has been deemed successful and production ready since 2024 and will be completely replacing ZooKeeper in Kafka deployments starting with Kafka version 4.0 \cite{kip-833}.
+
+\subsection{CockroachDB}
+
+According to its official website, "CockroachDB is the SQL database for building global, scalable cloud services that survive disasters"\cite{cockroach-db}.\\
+
+CockroachDB is an example of a strongly-consistent and highly-available distributed database that uses Raft for entirely managing consistency of both metadata and user data. CockroachDB divides its dataset into parts called ranges and uses Raft to maintain replicas of each range in multiple servers within the cluster \cite{cockroach-db}. Each range forms a separate Raft group, resulting in multiple Raft processes running within the cluster. Such a variant of Raft is typically called Multi-Raft and is further explained in Section \ref{scalabilirt-raft-multi-raft}.\\
+
+The extensive use of Raft has enabled CockroachDB to become a successful product, while claiming some of the strongest consistency guarantees within the distributed databases ecosystem.
+
+
+\section{Objectives of the Thesis}
+
+The primary objectives of this thesis are:
+\begin{enumerate}
+  \item Providing an overview of the Raft consensus algorithm.
+  \item Presenting an implementation of a simple distributed database with Raft as its consensus mechanism.
+\end{enumerate}
+
+As a result, this thesis should prove Raft's utility in implementing modern distributed systems. In addition, the presented implementation can act as a simple entry point for learning how to design and implement distributed databases using Raft.

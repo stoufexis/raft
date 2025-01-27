@@ -1,0 +1,53 @@
+\chapter{Conclusion and Future Work}
+
+In this chapter, some closing comments are given about this thesis' results and achievements. In addition, a set of ideas for possible follow-up work are presented.
+
+\section{Conclusion}
+
+The main goal of this thesis was to examine Raft and show that it can serve as the backbone for modern, strongly consistent distributed systems. This effort was indeed successful, as Raft, with little modification, was used as the basis for building a distributed key-value store which achieved the desired level of consistency.\\
+
+As shown in the experimental results of this thesis, Raft proved complete for all consensus-related functions of the system, since it performed both leader election and log replication in an adequately fault-tolerant manner. Its implementation was also fairly straight forward and fearless, as its specification is formally proven to be safe \cite{raft}, but also structured in an understandable fashion.\\
+
+Furthermore, this thesis successfully implemented a novel distributed key-value store, serving as a valuable reference for implementing similar systems in the future. The store is also capable enough to be extended in the future and then used directly.
+
+\section{Future Work}
+
+Even though the goals of this thesis were achieved, the resulting system is fairly bare-bones and can be improved in several ways.
+
+\subsection{Missing Common Database Features}
+
+When comparing the implemented system with similar key-value stores, there are several features that are obviously missing.\\
+
+\subsubsection{User Management}
+
+There is absolutely no user management implemented, providing no solution for authentication and access control. This is a feature found in most production-ready databases, as it protects the stored data, but also provides tracing of users' actions.
+
+\subsubsection{Additional Operations}
+
+The implemented system provides the bare minimum set of operations for a key-value store, leaving out features that would make it more convenient in a production environment. At least the following operations should definitely be included in the next version of the system.\\
+
+First, a user cannot select values using some condition when querying; only the selection of keys is allowed. Additionally, the key-selection capabilities of the system are rather poor; a request must contain complete key names and cannot select keys based on a pattern or other conditions. This is not always required, but it is definitely a highly desirable feature for a general-purpose key-value store. Finally, there is no mechanism in place that allows users to dynamically get updates when a key changes value. A user who needs to quickly detect changes has to perform simple reads in a loop instead.
+
+\subsection{Raft Features Not Implemented}
+
+This thesis' implementation of Raft includes all core features that make it a proper consensus mechanism, but lacks some parts of Raft's specification that enable its use in production-ready systems.\\
+
+Raft includes several extensions that make reconfigurations possible without interruption of service. Specifically, Raft includes a process for dynamically adding or removing servers from the cluster. In addition, Raft can enable a leader to voluntarily transfer its authority to another server and revert back to a follower. These features would be necessary for the store's use in real-world deployments, as they enable dynamic scaling of clusters as well as maintenance of servers.\\
+
+Finally, Raft describes a mechanism for compacting the internal logs of servers. The compaction process dramatically reduces the size of the log, saving space and making reads of large log segments more efficient. The latter benefit is particularly important, since reading the entire log is necessary for reconstructing the state machine's current state. As compaction is not implemented in this thesis, reconstructing the state of the key-value store becomes more and more inefficient as the log grows.
+
+\subsection{Alternative Messaging and Persistence Technologies}
+
+As this thesis aimed to present a simple and understandable implementation of a key-value store, the technologies picked for messaging and persistence were simple, but not efficient enough for real-world systems.\\
+
+Regarding server-to-server messaging, HTTP was a straightforward choice, as its semantics match those assumed by the Raft specification. The wide range of tools and libraries supporting HTTP also made the development process quick and enabled easy manual testing. However, in real-world scenarios, there would be a greatly increased volume of messages sent between servers, and the threshold of acceptable latency would be much lower. HTTP would not easily meet these demands, and additional effort should be put into finding and using an alternate technology.\\
+
+Sqlite, the persistence technology used, might also prove inadequate when faced with the log sizes expected in real-world installations of a key-value store. However, this is not as clear cut and should be thoroughly investigated in future efforts.
+
+\subsection{Multi-Raft}
+
+Currently, the store suffers from under-utilizing the follower servers, since they mostly wait passively, serving as live copies of the leader. Additionally, the store cannot comfortably scale to large cluster sizes. These shortcomings are deal-breakers for some data-intensive use-cases and can be addressed by implementing Multi-Raft, as described in Section \ref{scalabilirt-raft-multi-raft}.
+
+\subsection{Intensive Real-World Testing}
+
+Since guesswork can only go so far, a complete list of shortcomings of this thesis' implementation can only be compiled by putting the store through a long-term and thorough test in a production environment. In such an environment, the store should support real services, serving real users. As time goes by, it is expected that the less obvious problems with the current solution would show up and a clear set of required additional features will be presented.

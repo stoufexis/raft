@@ -1,0 +1,104 @@
+\documentclass[12pt]{report}
+
+% Packages
+\usepackage{graphicx}     % For images
+\usepackage{fancyhdr}     % For headers and footers
+\usepackage[top=2.5cm, left=2.5cm, right=2.5cm, bottom=2.5cm, headheight=1.25cm, footskip=1.25cm]{geometry} % Page Margins
+\usepackage{iflang}       % For language conditional commands
+\usepackage{polyglossia}  % For multiple languages
+\usepackage{fontspec}     % For specifying fonts
+\usepackage{subcaption}
+\usepackage{subfig}
+
+% setup listings
+\usepackage{listings}
+\lstset{breaklines=true} 
+\lstset{numbers=left, numberstyle=\scriptsize\ttfamily, numbersep=10pt, captionpos=b} 
+\lstset{backgroundcolor=\color{gray-5}}
+\lstset{basicstyle=\small\ttfamily}
+\lstset{framesep=4pt}
+\lstset{mathescape=false}
+
+\usepackage[backend=biber,style=ieee]{biblatex}
+\addbibresource{includes/references.bib}
+%% Εάν το overleaf κάνει timeout κατά το compilation, 
+%% μπορείτε να αλλάξετε από biber σε bibtex (είναι μάλλον 
+%% πιο γρήγορο αλλά όχι καλύτερο).
+%% αφαιρέστε τις πάνω δυο γραμμές
+%% Και να δείτε το σχόλιο Β στο τέλος
+
+%=================================================================
+% Language settings, switch the two languages to change language.
+\setdefaultlanguage{english} % Default language is English
+\setotherlanguage{greek}     % Secondary language is Greek
+
+% Document-specific information
+\newcommand{\thesisTitle}{Consensus problems and implementation of a distributed key-value store using the Raft Consensus Algorithm}
+\newcommand{\thesisTitleGreek}{Προβλήματα Consensus και υλοποίηση κατανεμημένης βάσης δεδομένων key-value με τη χρήση του αλγορίθμου Consensus Raft}
+\newcommand{\studentName}{Stefanos Toufexis}
+\newcommand{\studentNameGreek}{Στέφανος Τουφεξής}
+\newcommand{\studentID}{185291}
+\newcommand{\supervisorName}{Antoniou Efstathios}
+\newcommand{\supervisorNameGreek}{Αντωνίου Ευστάθιος}
+\newcommand{\undertakingDate}{17-10-2024}
+\newcommand{\completionDate}{26-01-2025}
+\newcommand{\completionDatePretty}{26 January 2025}
+%=================================================================
+
+
+
+% Font settings
+\setmainfont{FreeSerif} % Main font is FreeSerif
+\setsansfont{FreeSans}  % Sans Serif font is FreeSans
+\setmonofont{FreeMono}  % Monospaced font is FreeMono
+\newfontfamily\headerfont[Scale=0.95]{FreeSerif} % Font for headers and footers
+
+% Paragraph settings
+\setlength{\parskip}{10pt}  % Paragraph spacing
+\setlength{\parindent}{0pt} % Paragraph indentation
+
+% -----------------------------------
+% Header and footer settings
+% -----------------------------------
+\pagestyle{fancy}
+\fancyhf{} % Clear all header and footer fields
+\fancyhead[R]{\headerfont\nouppercase{\leftmark}} % Chapter name on right side with headerfont font
+\fancyfoot[C]{\headerfont\thepage} % Page number at center with headerfont font
+
+% -----------------------------------
+% Document content
+% -----------------------------------
+\begin{document}
+
+% Front Matter
+\pagenumbering{roman} % Roman numerals for front matter
+\include{includes/titlepage}
+\include{includes/rights}
+\include{includes/dedication}
+\include{includes/abstract}
+
+% Table of Contents
+\tableofcontents
+
+% Main Content
+\pagenumbering{arabic} % Arabic numerals for main content
+\setcounter{page}{1} % Start counting from page 1
+
+\include{chapters/1_Introduction}
+\include{chapters/2_Raft_Consensus_Algorithm}
+\include{chapters/3_Key-value_Store_implementation}
+\include{chapters/4_Results}
+\include{chapters/5_Discussion}
+
+% Bibliography
+%\bibliographystyle{ieeetr} % Use IEEE Transactions bibliography style
+%\bibliography{includes/references} % Reference list located in 'includes/references.bib'
+%% σχόλιο Β
+%% Εάν θέλετε να αλλάξετε από biber σε bibtex
+%% βγάλτε από τα σχόλια τις πάνω 2 γραμμές και βάλτε σε σχόλιο την παρακάτω
+\printbibliography[heading=bibintoc]
+
+% shorthands
+\newcommand{\inlineCode}{\lstinline[basicstyle=\normalsize\ttfamily]}
+
+\end{document}
